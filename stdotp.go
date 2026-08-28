@@ -28,6 +28,7 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
+	"uuid"
 )
 
 // AppVersion is the semantic version of stdotp.
@@ -208,6 +209,7 @@ type VaultFile struct {
 
 // Account holds one TOTP or HOTP entry.
 type Account struct {
+	ID        string `json:"id,omitempty"` // RFC 9562 UUIDv4 via Go 1.27 stdlib uuid
 	Name      string `json:"name"`
 	Issuer    string `json:"issuer,omitempty"`
 	Secret    string `json:"secret"`            // base32-encoded, no padding
@@ -379,7 +381,7 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 	raw = append(raw, '\n')
 
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".stdotp-*.tmp")
+	tmp, err := os.CreateTemp(dir, fmt.Sprintf(".stdotp-%s-*.tmp", uuid.New().String()))
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
@@ -507,6 +509,7 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	}
 
 	return Account{
+		ID:        uuid.New().String(),
 		Name:      accountName,
 		Issuer:    issuer,
 		Secret:    secret,
@@ -925,6 +928,7 @@ func accountFromSecret(name, secret string) (Account, error) {
 		return Account{}, fmt.Errorf("invalid base32 secret: %w", err)
 	}
 	return Account{
+		ID:        uuid.New().String(),
 		Name:      name,
 		Algorithm: "SHA1",
 		Digits:    6,
@@ -1066,6 +1070,7 @@ func cmdList(args []string) int {
 
 	if *asJSON {
 		type accountJSON struct {
+			ID        string `json:"id,omitempty"`
 			Name      string `json:"name"`
 			Issuer    string `json:"issuer,omitempty"`
 			Type      string `json:"type"`
@@ -1076,6 +1081,7 @@ func cmdList(args []string) int {
 		list := make([]accountJSON, len(data.Accounts))
 		for i, a := range data.Accounts {
 			list[i] = accountJSON{
+				ID:        a.ID,
 				Name:      a.Name,
 				Issuer:    a.Issuer,
 				Type:      strings.ToUpper(a.Type),
@@ -1249,7 +1255,7 @@ func cmdSelfTest() int {
 	// 4. AES-256-GCM Round-trip
 	salt := []byte("1234567890123456")
 	k := deriveKey("selftestpass", salt, 1000)
-	vd := VaultData{Accounts: []Account{{Name: "test", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
+	vd := VaultData{Accounts: []Account{{ID: uuid.New().String(), Name: "test", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
 	nonce, ct, err := encryptVault(vd, k)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[FAIL] encryptVault: %v\n", err)
@@ -1270,6 +1276,14 @@ func cmdSelfTest() int {
 		return exitError
 	}
 	fmt.Println("[PASS] Google Authenticator otpauth:// URI parser & builder")
+
+	// 6. Go 1.27 stdlib uuid package verification
+	u := uuid.New().String()
+	if len(u) != 36 || u[14] != '4' {
+		fmt.Fprintf(os.Stderr, "[FAIL] uuid.New() generation failed: %s\n", u)
+		return exitError
+	}
+	fmt.Println("[PASS] Go 1.27 stdlib uuid (RFC 9562) generation")
 
 	fmt.Println("All self-tests passed successfully.")
 	return exitOK
