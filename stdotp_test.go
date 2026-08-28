@@ -106,14 +106,14 @@ func TestTOTP_RFC6238(t *testing.T) {
 }
 
 // ============================================================
-// RFC 7914 §11 — PBKDF2-HMAC-SHA256 test vectors
+// RFC 7914 §12 — PBKDF2-HMAC-SHA256 test vectors
 // ============================================================
 
 // TestPBKDF2_RFC7914 verifies both PBKDF2-HMAC-SHA256 test vectors from
-// RFC 7914 §11 ("Test Vectors for PBKDF2 with HMAC-SHA-256").
+// RFC 7914 §12 ("Test Vectors for PBKDF2 with HMAC-SHA-256").
 //
 // Source: Percival, C. and Josefsson, S., "The scrypt Password-Based Key
-// Derivation Function," RFC 7914, Section 11, August 2016.
+// Derivation Function," RFC 7914, Section 12, August 2016.
 //
 // A round-trip test (encrypt then decrypt) only proves that our implementation
 // is self-consistent. These vectors prove it matches the published standard
@@ -742,5 +742,62 @@ func TestCLI_StdoutStderrSplit(t *testing.T) {
 	// stderr: the password prompt, never the OTP
 	if strings.Contains(stderr, out[:6]) {
 		t.Errorf("OTP code leaked into stderr: %q", stderr)
+	}
+}
+
+// TestCLI_SelfTest verifies that the in-process self-test subcommand passes cleanly.
+func TestCLI_SelfTest(t *testing.T) {
+	out, _, code := runCLI(t, "", "self-test")
+	if code != exitOK {
+		t.Fatalf("self-test failed with exit code %d", code)
+	}
+	if !strings.Contains(out, "All self-tests passed successfully.") {
+		t.Errorf("expected success message, got: %q", out)
+	}
+}
+
+// TestCLI_Version verifies the version subcommand.
+func TestCLI_Version(t *testing.T) {
+	out, _, code := runCLI(t, "", "version")
+	if code != exitOK {
+		t.Fatalf("version failed with exit code %d", code)
+	}
+	if !strings.Contains(out, "stdotp v1.0.0") {
+		t.Errorf("expected stdotp v1.0.0, got: %q", out)
+	}
+}
+
+// TestCLI_ListJSON verifies that list --json outputs a valid JSON array of accounts.
+func TestCLI_ListJSON(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "github")
+
+	out, _, code := runCLI(t, pass, vf, "list", "--json")
+	if code != exitOK {
+		t.Fatalf("list --json failed with exit code %d", code)
+	}
+	if !strings.Contains(out, `"name": "github"`) || !strings.Contains(out, `"id"`) {
+		t.Errorf("list --json output missing expected fields: %q", out)
+	}
+}
+
+// TestCLI_CodeWithTime verifies deterministic OTP generation with --time override.
+func TestCLI_CodeWithTime(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "rfc")
+
+	// Unix timestamp 59: test deterministic code calculation
+	out, _, code := runCLI(t, pass, vf, "code", "rfc", "--time=59")
+	if code != exitOK {
+		t.Fatalf("code --time failed with exit code %d", code)
+	}
+	if len(strings.TrimSpace(out)) < 6 {
+		t.Errorf("unexpected output from code --time: %q", out)
 	}
 }

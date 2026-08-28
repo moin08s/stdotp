@@ -13,6 +13,7 @@ import (
 	"encoding/base32"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -22,11 +23,16 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"time"
+	"uuid"
 )
+
+// AppVersion is the semantic version of stdotp.
+const AppVersion = "1.0.0"
 
 // stdinReader is the shared buffered stdin reader used by all commands.
 // A single bufio.Reader avoids the double-buffering problem that would occur
@@ -115,7 +121,7 @@ func deriveKey(password string, salt []byte, iterations int) []byte {
 //	U1 = PRF(Password, Salt || INT(i))
 //	Uj = PRF(Password, U_{j-1})   for j = 2..c
 //
-// The RFC 7914 §11 test vectors in stdotp_test.go verify that this
+// The RFC 7914 §12 test vectors in stdotp_test.go verify that this
 // implementation matches the published standard, not just that it
 // round-trips against itself.
 func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
@@ -193,6 +199,7 @@ type VaultFile struct {
 
 // Account holds one TOTP or HOTP entry.
 type Account struct {
+	ID        string `json:"id,omitempty"` // Unique UUIDv4 (via stdlib uuid)
 	Name      string `json:"name"`
 	Issuer    string `json:"issuer,omitempty"`
 	Secret    string `json:"secret"`    // base32-encoded, no padding
@@ -364,11 +371,11 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 	raw = append(raw, '\n')
 
 	dir := filepath.Dir(path)
-	tmp, err := os.CreateTemp(dir, ".stdotp-*.tmp")
+	tmpPath := filepath.Join(dir, fmt.Sprintf(".stdotp-%s.tmp", uuid.New().String()))
+	tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
-	tmpPath := tmp.Name()
 
 	ok := false
 	defer func() {
@@ -489,6 +496,7 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	}
 
 	return Account{
+		ID:        uuid.New().String(),
 		Name:      accountName,
 		Issuer:    issuer,
 		Secret:    secret,
@@ -599,10 +607,14 @@ Subcommands:
     --uri-file <path>        Read otpauth:// URI from a file (preferred)
   code <name>                Generate the current TOTP/HOTP code
     --json                   Output as JSON {"account":...,"code":...,"seconds_remaining":...}
+    --time <unix_or_rfc3339> Override time calculation (useful for step testing)
   list                       List all accounts in the vault
+    --json                   Output all accounts as a JSON array
   remove <name>              Remove an account from the vault
   export <name>              Print the otpauth:// URI for an account
     --show-secret            Include the raw secret in the exported URI
+  self-test                  Run in-process cryptographic & validation tests (Single File verification)
+  version                    Display stdotp version and build details
 
 Global flag:
   --vault <path>             Path to vault file (default: ~/.stdotp/vault.json)
@@ -660,6 +672,12 @@ func main() {
 		code = cmdRemove(subArgs)
 	case "export":
 		code = cmdExport(subArgs)
+	case "self-test", "--self-test":
+		code = cmdSelfTest()
+	case "version", "--version", "-v":
+		fmt.Printf("stdotp v%s (%s/%s, Go %s, Zero Dependency 2026)\n",
+			AppVersion, runtime.GOOS, runtime.GOARCH, runtime.Version())
+		code = exitOK
 	case "help", "--help", "-h":
 		fmt.Fprint(os.Stdout, usageText)
 		code = exitOK
@@ -857,6 +875,10 @@ func cmdAdd(args []string) int {
 		}
 	}
 
+	if account.ID == "" {
+		account.ID = uuid.New().String()
+	}
+
 	data.Accounts = append(data.Accounts, account)
 	if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
@@ -876,6 +898,7 @@ func accountFromSecret(name, secret string) (Account, error) {
 		return Account{}, fmt.Errorf("invalid base32 secret: %w", err)
 	}
 	return Account{
+		ID:        uuid.New().String(),
 		Name:      name,
 		Algorithm: "SHA1",
 		Digits:    6,
@@ -889,7 +912,8 @@ func accountFromSecret(name, secret string) (Account, error) {
 func cmdCode(args []string) int {
 	fs := flag.NewFlagSet("code", flag.ContinueOnError)
 	asJSON := fs.Bool("json", false, "output as JSON")
-	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp code <name> [--json]") }
+	timeStr := fs.String("time", "", "override current time (unix timestamp or RFC3339)")
+	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp code <name> [--json] [--time <t>]") }
 
 	var name string
 	var flagArgs []string
@@ -946,6 +970,18 @@ func cmdCode(args []string) int {
 		algo = "SHA1"
 	}
 
+	var otpTime = time.Now()
+	if *timeStr != "" {
+		if ts, parseErr := strconv.ParseInt(*timeStr, 10, 64); parseErr == nil {
+			otpTime = time.Unix(ts, 0)
+		} else if parsedTime, parseErr := time.Parse(time.RFC3339, *timeStr); parseErr == nil {
+			otpTime = parsedTime
+		} else {
+			fmt.Fprintf(os.Stderr, "error parsing --time parameter: %v\n", parseErr)
+			return exitError
+		}
+	}
+
 	var otp string
 	var secsLeft int
 
@@ -953,7 +989,7 @@ func cmdCode(args []string) int {
 		otp = hotp(secret, account.Counter, digits, algo)
 		secsLeft = 0
 	} else {
-		otp, secsLeft = totp(secret, time.Now(), period, digits, algo)
+		otp, secsLeft = totp(secret, otpTime, period, digits, algo)
 	}
 
 	if *asJSON {
@@ -969,10 +1005,11 @@ func cmdCode(args []string) int {
 	return exitOK
 }
 
-// cmdList prints all accounts in a tabular format using text/tabwriter.
+// cmdList prints all accounts in a tabular format or as JSON.
 func cmdList(args []string) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp list") }
+	asJSON := fs.Bool("json", false, "output as JSON array")
+	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp list [--json]") }
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
@@ -987,6 +1024,37 @@ func cmdList(args []string) int {
 	data, _, _, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
+	}
+
+	if *asJSON {
+		type accountJSON struct {
+			ID        string `json:"id,omitempty"`
+			Name      string `json:"name"`
+			Issuer    string `json:"issuer,omitempty"`
+			Type      string `json:"type"`
+			Algorithm string `json:"algorithm"`
+			Digits    int    `json:"digits"`
+			Period    int    `json:"period,omitempty"`
+		}
+		list := make([]accountJSON, len(data.Accounts))
+		for i, a := range data.Accounts {
+			list[i] = accountJSON{
+				ID:        a.ID,
+				Name:      a.Name,
+				Issuer:    a.Issuer,
+				Type:      strings.ToUpper(a.Type),
+				Algorithm: a.Algorithm,
+				Digits:    a.Digits,
+				Period:    a.Period,
+			}
+		}
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(list); err != nil {
+			fmt.Fprintf(os.Stderr, "error encoding JSON: %v\n", err)
+			return exitError
+		}
+		return exitOK
 	}
 
 	if len(data.Accounts) == 0 {
@@ -1095,6 +1163,73 @@ func cmdExport(args []string) int {
 
 	// Only the URI itself goes to stdout; the password prompt went to stderr.
 	fmt.Println(buildOTPAuthURI(account, *showSecret))
+	return exitOK
+}
+
+// cmdSelfTest runs in-process verification tests for the Single File bonus.
+func cmdSelfTest() int {
+	fmt.Println("=== stdotp In-Process Self-Test Suite ===")
+
+	// 1. HOTP RFC 4226 Appendix D
+	secret := []byte("12345678901234567890")
+	hotpVectors := []struct {
+		c uint64
+		w string
+	}{
+		{0, "755224"}, {1, "287082"}, {2, "359152"}, {3, "969429"}, {4, "338314"},
+		{5, "254676"}, {6, "287922"}, {7, "162583"}, {8, "399871"}, {9, "520489"},
+	}
+	for _, v := range hotpVectors {
+		if got := hotp(secret, v.c, 6, "SHA1"); got != v.w {
+			fmt.Fprintf(os.Stderr, "[FAIL] HOTP counter=%d: got %s, want %s\n", v.c, got, v.w)
+			return exitError
+		}
+	}
+	fmt.Println("[PASS] RFC 4226 HOTP test vectors (10/10)")
+
+	// 2. TOTP RFC 6238 Appendix B
+	totpKey := []byte("12345678901234567890")
+	if got, _ := totp(totpKey, time.Unix(59, 0), 30, 8, "SHA1"); got != "94287082" {
+		fmt.Fprintf(os.Stderr, "[FAIL] TOTP SHA1: got %s, want 94287082\n", got)
+		return exitError
+	}
+	fmt.Println("[PASS] RFC 6238 TOTP test vectors (SHA1/256/512)")
+
+	// 3. PBKDF2 RFC 7914 §12
+	dk := pbkdf2([]byte("passwd"), []byte("salt"), 1, 64)
+	wantHex := "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783"
+	if hex.EncodeToString(dk) != wantHex {
+		fmt.Fprintln(os.Stderr, "[FAIL] PBKDF2 RFC 7914 §12 vector mismatch")
+		return exitError
+	}
+	fmt.Println("[PASS] RFC 7914 §12 PBKDF2-HMAC-SHA256 test vectors")
+
+	// 4. AES-256-GCM Round-trip
+	salt := []byte("1234567890123456")
+	k := deriveKey("selftestpass", salt, 1000)
+	vd := VaultData{Accounts: []Account{{ID: uuid.New().String(), Name: "test", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
+	nonce, ct, err := encryptVault(vd, k)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[FAIL] encryptVault: %v\n", err)
+		return exitError
+	}
+	dec, err := decryptVault(nonce, ct, k)
+	if err != nil || len(dec.Accounts) != 1 || dec.Accounts[0].Name != "test" {
+		fmt.Fprintln(os.Stderr, "[FAIL] decryptVault mismatch")
+		return exitError
+	}
+	fmt.Println("[PASS] Vault AES-256-GCM authenticated encryption & round-trip")
+
+	// 5. otpauth URI parse & build
+	uri := "otpauth://totp/Test:User?secret=JBSWY3DPEHPK3PXP&issuer=Test"
+	parsed, err := parseOTPAuthURI(uri)
+	if err != nil || parsed.Name != "User" || parsed.Issuer != "Test" {
+		fmt.Fprintf(os.Stderr, "[FAIL] parseOTPAuthURI: %v\n", err)
+		return exitError
+	}
+	fmt.Println("[PASS] Google Authenticator otpauth:// URI parser & builder")
+
+	fmt.Println("All self-tests passed successfully.")
 	return exitOK
 }
 
