@@ -779,7 +779,7 @@ func TestCLI_ListJSON(t *testing.T) {
 	if code != exitOK {
 		t.Fatalf("list --json failed with exit code %d", code)
 	}
-	if !strings.Contains(out, `"name": "github"`) || !strings.Contains(out, `"id"`) {
+	if !strings.Contains(out, `"name": "github"`) || !strings.Contains(out, `"type": "TOTP"`) {
 		t.Errorf("list --json output missing expected fields: %q", out)
 	}
 }

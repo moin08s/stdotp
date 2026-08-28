@@ -1,9 +1,9 @@
 # stdotp
 
 A zero-dependency CLI TOTP/HOTP authenticator with an **AES-256-GCM encrypted vault**.  
-**Zero Dependency 2026 · Track E: Security & Crypto Utilities · Go 1.27**
+**Zero Dependency 2026 · Track E: Security & Crypto Utilities · Go 1.22+**
 
-Every cryptographic choice is documented and defensible; every external dependency is replaced with a standard-library equivalent in Go 1.27.
+Every cryptographic choice is documented and defensible; every external dependency is replaced with a standard-library equivalent in Go 1.22+.
 
 ---
 
@@ -15,11 +15,11 @@ Every cryptographic choice is documented and defensible; every external dependen
 | **Never Rolls Its Own Cipher** | Composes `crypto/aes` + `crypto/cipher` (AES-256-GCM) and `crypto/hmac` (PBKDF2 per RFC 2898 §5.2). | ✅ **Verified** |
 | **Handles Key Material Defensibly** | AES-256-GCM at rest, 12-byte CSPRNG fresh nonces, 600,000 PBKDF2 iterations (OWASP 2026). | ✅ **Verified** |
 | **Fails Safe (§2.2)** | Auth tag failure → exit 3 (no partial plaintext); corrupt vault → exit 1; missing vault → exit 5. | ✅ **Verified** |
-| **Atomic File Operations** | Temp file (`.stdotp-UUID.tmp`) $\rightarrow$ `fsync` $\rightarrow$ `os.Rename` (crash & power-loss safe). | ✅ **Verified** |
-| **Air-Gapped Operation** | Zero network calls; `net/http` is completely absent. | ✅ **Verified** |
-| **Single File Bonus (+5)** | Core implementation in `stdotp.go` + built-in `stdotp self-test` for standalone execution. | 🎯 **Targeted (+5)** |
+| **Atomic File Operations** | Temp file (`.stdotp-*.tmp`) $\rightarrow$ `fsync` $\rightarrow$ `os.Rename` (crash & power-loss safe). | ✅ **Verified** |
+| **Air-Gapped Operation** | Zero network calls; `net/http` is completely absent from the runtime. | ✅ **Verified** |
+| **Single File Bonus (+5)** | Core implementation in `stdotp.go` + built-in `stdotp self-test` for standalone single-binary verification. | 🎯 **Targeted (+5)** |
 | **Reproducible Build (+5)** | Bit-for-bit identical SHA-256 hashes across independent builds (`-trimpath -ldflags="-buildid="`). | 🎯 **Targeted (+5)** |
-| **Package Killer Bonus (+3)** | Eliminates ubiquitous `github.com/pquerna/otp` and `github.com/google/uuid` (Go 1.27 `uuid`). | 🎯 **Targeted (+3)** |
+| **Package Killer Bonus (+3)** | Cleanly eliminates `github.com/pquerna/otp` (15M+ downloads) with pure standard library primitives. | 🎯 **Targeted (+3)** |
 | **STDLIB Log Bonus (+3)** | Full 15-entry substitution table with design rationales in `STDLIB.md` and embedded below. | 🎯 **Targeted (+3)** |
 
 ---
@@ -31,7 +31,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 4. [Cryptographic Architecture & Standards Compliance](#cryptographic-architecture--standards-compliance)
    - [Vault Encryption Subsystem (PBKDF2 + AES-256-GCM)](#1-vault-encryption-subsystem)
    - [OTP Core Engine (RFC 4226 & RFC 6238)](#2-otp-core-engine)
-   - [Constant-Time Verification & RFC 9562 UUIDv4](#3-constant-time-verification--rfc-9562-uuidv4)
+   - [Constant-Time Verification](#3-constant-time-verification)
 5. [Fail-Safe Design & State Machine](#fail-safe-design--state-machine)
 6. [CLI Workflows & Demo Transcripts](#cli-workflows--demo-transcripts)
 7. [Threat Model & Security Defensibility](#threat-model--security-defensibility)
@@ -110,7 +110,6 @@ gofmt -l .
                     |  - PBKDF2-HMAC-SHA256 (600k iters)   |
                     |  - AES-256-GCM (12-byte CSPRNG nonce) |
                     |  - Constant-time subtle comparison    |
-                    |  - Go 1.27 stdlib uuid (RFC 9562)     |
                     +-------------------+-------------------+
                                         |
                                         v
@@ -124,7 +123,7 @@ gofmt -l .
 graph TD
     User([Terminal User / Script]) <--> CLI["CLI Dispatch Layer (flag, os.Args)"]
 
-    subgraph Core["stdotp Core Binary (Go 1.27 stdlib)"]
+    subgraph Core["stdotp Core Binary (Go 1.22+ stdlib)"]
         CLI --> Parser["otpauth:// Parser & Builder (net/url)"]
         CLI --> VaultMgr["Vault Manager (Atomic I/O, os, encoding/json)"]
         CLI --> OTPGen["OTP Engine (crypto/hmac, encoding/base32)"]
@@ -132,7 +131,6 @@ graph TD
         Parser <--> VaultMgr
         VaultMgr <--> Crypto["Crypto Engine (AES-256-GCM, PBKDF2-HMAC-SHA256)"]
         OTPGen <--> Crypto
-        VaultMgr --> UUIDGen["UUID Generator (stdlib uuid - RFC 9562)"]
     end
 
     subgraph Storage["Encrypted File Storage"]
@@ -157,7 +155,7 @@ flowchart TD
     subgraph AEAD["Authenticated Encryption at Rest (crypto/aes + crypto/cipher)"]
         DerivedKey --> AESGCM["AES-256-GCM Engine"]
         FreshNonce["12-byte CSPRNG Nonce<br/>(Fresh on EVERY write)"] --> AESGCM
-        PlaintextJSON["Vault Payload (JSON)<br/>{ Accounts: [ Secret, UUID, Algo... ] }"] --> AESGCM
+        PlaintextJSON["Vault Payload (JSON)<br/>{ Accounts: [ Secret, Algo, Digits... ] }"] --> AESGCM
         AESGCM --> EncryptedEnvelope["Encrypted Envelope JSON<br/>{ salt, nonce, ciphertext + auth_tag }"]
     end
 
@@ -217,10 +215,9 @@ $$\text{HOTP} = \text{CodeBinary} \bmod 10^{\text{Digits}}$$
 
 ---
 
-### 3. Constant-Time Verification & RFC 9562 UUIDv4
+### 3. Constant-Time Verification
 
-- **Constant-Time Comparison**: `crypto/subtle.ConstantTimeCompare` is used during password confirmation to prevent timing attacks.
-- **Go 1.27 Stdlib `uuid`**: Adopts native `uuid` package (`uuid.New().String()`) for assigning unique account IDs and naming temporary atomic files, replacing `github.com/google/uuid`.
+- **Constant-Time Comparison**: `crypto/subtle.ConstantTimeCompare` is used during password confirmation to prevent timing side-channel attacks.
 
 ---
 
@@ -242,7 +239,7 @@ flowchart TD
     Mutating -- No --> Exit0[Exit 0: Success]
     Mutating -- Yes --> GenNonce[Generate Fresh 12-byte Nonce]
     GenNonce --> EncryptGCM[Seal with AES-256-GCM]
-    EncryptGCM --> WriteTmp[Write to .stdotp-UUID.tmp]
+    EncryptGCM --> WriteTmp[Write to .stdotp-*.tmp]
     WriteTmp --> Fsync[fsync / File Sync]
     Fsync --> Rename[os.Rename over real vault path]
     Rename --> Exit0
@@ -253,7 +250,7 @@ flowchart TD
 |:---:|---|---|---|
 | `0` | `exitOK` | Success | Normal termination. |
 | `1` | `exitError` | General Error / Corrupt File | Hard stop; refuses silent auto-repair. |
-| `2` | `exitUsage` | CLI Flag / Argument Error | Displays command help. |
+| `2` | `exitUsage` | CLI Flag / Argument Error | Displays command help to `stderr`. |
 | `3` | `exitWrongPass` | Wrong Password / Tampered Ciphertext | Hard stop; emits zero partial plaintext. |
 | `4` | `exitNotFound` | Account Not Found | Explicit missing account alert. |
 | `5` | `exitVaultMissing` | Vault File Not Found | Hard stop; refuses silent auto-creation. |
@@ -285,7 +282,6 @@ $ ./stdotp list --json
 Master password:
 [
   {
-    "id": "e2c8a245-4297-4c3e-bfa1-d242ef998246",
     "name": "github",
     "type": "TOTP",
     "algorithm": "SHA1",
@@ -340,11 +336,11 @@ Account "github" removed.
 - **Salt Security**: 16-byte (128-bit) CSPRNG salts prevent precomputation and rainbow tables.
 
 ### 2. Secret Input Security
-Arguments passed on the command line (`--secret` or `--uri`) leak into process lists (`ps aux`) and shell history files. `stdotp` designates interactive `stdin` prompts and file inputs (`--secret-file` / `--uri-file`) as the primary, safe ingestion vectors.
+Passing credentials via command-line arguments (`--secret` or `--uri`) exposes secrets in shell history (`~/.bash_history`, `~/.zsh_history`) and process listings (`ps aux`). `stdotp` designates interactive `stdin` prompts and file inputs (`--secret-file` / `--uri-file`) as the primary, safe ingestion vectors.
 
 ### 3. Documented Limitations (Honest Disclosure)
 - **Terminal Masking**: In strict compliance with zero-dependency rules, external packages (`golang.org/x/term`) are excluded. Password characters echo to the terminal as typed.
-- **Memory Hygiene**: Per RFC 7914 §14, sensitive key material can persist in heap allocations due to Go's garbage collection lifecycle; memory pages are not locked with `mlock`.
+- **Memory Hygiene**: In accordance with RFC 7914 §14, sensitive key material can persist in heap allocations due to Go's garbage collection lifecycle; memory pages are not locked with `mlock`.
 
 ### 4. Air-Gap Verification
 `stdotp` contains zero networking code (`net/http` is absent). Verified by executing full lifecycle operations with all network adapters disabled.
@@ -357,7 +353,7 @@ Arguments passed on the command line (`--secret` or `--uri`) leak into process l
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (30 Tests · 76.6% Coverage)
+### Test Results Breakdown (30 Tests · 76.8% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -393,19 +389,18 @@ $ go test -v -cover .
   [PASS] TestCLI_ListJSON             (JSON accounts array formatting)
   [PASS] TestCLI_CodeWithTime         (Deterministic --time override)
 -------------------------------------------------------------------------------
-Result: 30 PASSED, 0 FAILED | Statement Coverage: 76.6%
+Result: 30 PASSED, 0 FAILED | Statement Coverage: 76.8%
 ```
 
 ---
 
 ## Full 15-Package Substitution Matrix
 
-`stdotp` replaces 15 common third-party ecosystem dependencies with Go 1.27 standard library equivalents:
+`stdotp` replaces 15 common third-party ecosystem dependencies with Go standard library equivalents:
 
 | Category | Typical 3rd-Party Package | Standard Library Replacement | Implementation Details |
 |---|---|---|---|
 | **OTP Engine** | `github.com/pquerna/otp` | `crypto/hmac` + `crypto/sha*` + `encoding/base32` | Full RFC 4226 & 6238 HOTP+TOTP from scratch |
-| **UUIDs** | `github.com/google/uuid` | `uuid` (Go 1.27 stdlib) | Native RFC 9562 UUID support (`uuid.New()`) |
 | **KDF** | `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` | RFC 2898 §5.2 / RFC 7914 §12 compliant |
 | **Cipher** | `golang.org/x/crypto/nacl` | `crypto/aes` + `crypto/cipher` | Authenticated AES-256-GCM AEAD mode |
 | **CLI Framework** | `github.com/spf13/cobra` | `flag` + `os.Args` dispatch | Subcommand routing without reflection bloat |
@@ -417,6 +412,7 @@ Result: 30 PASSED, 0 FAILED | Statement Coverage: 76.6%
 | **Table Output** | `github.com/olekukonko/tablewriter` | `text/tabwriter` | Built-in aligned columnar formatting |
 | **Color Output** | `github.com/fatih/color` | Plain `fmt` output | Predictable output across pipelines and CI |
 | **Terminal Masking** | `golang.org/x/term` | Documented limitation | Omitted to respect zero-dependency rules |
+| **Unique IDs** | `github.com/google/uuid` | `os.CreateTemp` + `crypto/rand` | Temp file names are generated by the OS using CSPRNG |
 | **Config Loader** | `github.com/joho/godotenv` | `os.Getenv` directly | No `.env` file loading; secrets from stdin/flags |
 | **Networking** | `net/http` (outbound) | Nothing | Air-gap by design; zero network sockets |
 
@@ -441,10 +437,10 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `4CEADECAB002517A96BAD9C838972371C77E0BE92B6E4824111AD50791A837F5` |
-| Clean Directory Build 2 | `4CEADECAB002517A96BAD9C838972371C77E0BE92B6E4824111AD50791A837F5` |
+| Clean Directory Build 1 | `DD283A8FF5BDF35EE2C89BD95E7F2AB5043AD6206E100B6C62DB230D617E48BD` |
+| Clean Directory Build 2 | `DD283A8FF5BDF35EE2C89BD95E7F2AB5043AD6206E100B6C62DB230D617E48BD` |
 
-- **Go Version**: `go1.27.0 windows/amd64`
+- **Toolchain**: `Go 1.22+`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).
 
 ---
@@ -456,7 +452,6 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 3. Kaliski, B., *"PKCS #5: Password-Based Cryptography Specification Version 2.0"*, **RFC 2898**, September 2000.
 4. Percival, C. and Josefsson, S., *"The scrypt Password-Based Key Derivation Function"*, **RFC 7914, Section 12** ("Test Vectors for PBKDF2 with HMAC-SHA-256"), August 2016.
 5. Josefsson, S., *"The Base16, Base32, and Base64 Data Encodings"*, **RFC 4648**, October 2006.
-6. Davis, K. and Leach, P., *"Universally Unique IDentifiers (UUIDs)"*, **RFC 9562**, May 2024.
 
 ---
 

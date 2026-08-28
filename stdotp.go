@@ -28,7 +28,6 @@ import (
 	"strings"
 	"text/tabwriter"
 	"time"
-	"uuid"
 )
 
 // AppVersion is the semantic version of stdotp.
@@ -199,11 +198,10 @@ type VaultFile struct {
 
 // Account holds one TOTP or HOTP entry.
 type Account struct {
-	ID        string `json:"id,omitempty"` // Unique UUIDv4 (via stdlib uuid)
 	Name      string `json:"name"`
 	Issuer    string `json:"issuer,omitempty"`
-	Secret    string `json:"secret"`    // base32-encoded, no padding
-	Algorithm string `json:"algorithm"` // SHA1, SHA256, SHA512
+	Secret    string `json:"secret"`            // base32-encoded, no padding
+	Algorithm string `json:"algorithm"`         // SHA1, SHA256, SHA512
 	Digits    int    `json:"digits"`
 	Period    int    `json:"period"`
 	Type      string `json:"type"`              // "totp" or "hotp"
@@ -371,11 +369,11 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 	raw = append(raw, '\n')
 
 	dir := filepath.Dir(path)
-	tmpPath := filepath.Join(dir, fmt.Sprintf(".stdotp-%s.tmp", uuid.New().String()))
-	tmp, err := os.OpenFile(tmpPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	tmp, err := os.CreateTemp(dir, ".stdotp-*.tmp")
 	if err != nil {
 		return fmt.Errorf("create temp file: %w", err)
 	}
+	tmpPath := tmp.Name()
 
 	ok := false
 	defer func() {
@@ -496,7 +494,6 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	}
 
 	return Account{
-		ID:        uuid.New().String(),
 		Name:      accountName,
 		Issuer:    issuer,
 		Secret:    secret,
@@ -875,10 +872,6 @@ func cmdAdd(args []string) int {
 		}
 	}
 
-	if account.ID == "" {
-		account.ID = uuid.New().String()
-	}
-
 	data.Accounts = append(data.Accounts, account)
 	if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
@@ -898,7 +891,6 @@ func accountFromSecret(name, secret string) (Account, error) {
 		return Account{}, fmt.Errorf("invalid base32 secret: %w", err)
 	}
 	return Account{
-		ID:        uuid.New().String(),
 		Name:      name,
 		Algorithm: "SHA1",
 		Digits:    6,
@@ -1028,7 +1020,6 @@ func cmdList(args []string) int {
 
 	if *asJSON {
 		type accountJSON struct {
-			ID        string `json:"id,omitempty"`
 			Name      string `json:"name"`
 			Issuer    string `json:"issuer,omitempty"`
 			Type      string `json:"type"`
@@ -1039,7 +1030,6 @@ func cmdList(args []string) int {
 		list := make([]accountJSON, len(data.Accounts))
 		for i, a := range data.Accounts {
 			list[i] = accountJSON{
-				ID:        a.ID,
 				Name:      a.Name,
 				Issuer:    a.Issuer,
 				Type:      strings.ToUpper(a.Type),
@@ -1207,7 +1197,7 @@ func cmdSelfTest() int {
 	// 4. AES-256-GCM Round-trip
 	salt := []byte("1234567890123456")
 	k := deriveKey("selftestpass", salt, 1000)
-	vd := VaultData{Accounts: []Account{{ID: uuid.New().String(), Name: "test", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
+	vd := VaultData{Accounts: []Account{{Name: "test", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
 	nonce, ct, err := encryptVault(vd, k)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[FAIL] encryptVault: %v\n", err)
