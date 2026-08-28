@@ -1,0 +1,14 @@
+﻿# Compiled binary
+stdotp
+stdotp.exe
+
+# Test binary
+*.test
+*.test.exe
+
+# Temp vault files written during tests
+.stdotp-*.tmp
+
+# OS junk
+.DS_Store
+Thumbs.db
