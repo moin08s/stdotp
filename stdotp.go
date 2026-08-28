@@ -212,8 +212,8 @@ type Account struct {
 	ID        string `json:"id,omitempty"` // RFC 9562 UUIDv4 via Go 1.27 stdlib uuid
 	Name      string `json:"name"`
 	Issuer    string `json:"issuer,omitempty"`
-	Secret    string `json:"secret"`            // base32-encoded, no padding
-	Algorithm string `json:"algorithm"`         // SHA1, SHA256, SHA512
+	Secret    string `json:"secret"`    // base32-encoded, no padding
+	Algorithm string `json:"algorithm"` // SHA1, SHA256, SHA512
 	Digits    int    `json:"digits"`
 	Period    int    `json:"period"`
 	Type      string `json:"type"`              // "totp" or "hotp"

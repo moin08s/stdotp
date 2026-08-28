@@ -930,7 +930,6 @@ func TestCLI_Status(t *testing.T) {
 	}
 }
 
-
 // ============================================================
 // Benchmarks (Performance & Allocation Metrics)
 // ============================================================
@@ -984,4 +983,3 @@ func BenchmarkVaultEncryptDecrypt(b *testing.B) {
 		}
 	}
 }
-
