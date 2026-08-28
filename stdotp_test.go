@@ -818,6 +818,119 @@ func TestCLI_InitCustomIterations(t *testing.T) {
 	}
 }
 
+// TestCLI_VerifyValid verifies checking a valid TOTP token.
+func TestCLI_VerifyValid(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "alice")
+
+	// Get current code
+	codeOut, _, code := runCLI(t, pass, vf, "code", "alice", "--json")
+	if code != exitOK {
+		t.Fatalf("code failed: %d", code)
+	}
+	re := regexp.MustCompile(`"code":"(\d+)"`)
+	m := re.FindStringSubmatch(codeOut)
+	if len(m) < 2 {
+		t.Fatalf("failed to extract code from: %s", codeOut)
+	}
+	token := m[1]
+
+	// Verify code
+	out, _, code := runCLI(t, pass, vf, "verify", "alice", token)
+	if code != exitOK || !strings.Contains(out, "Valid code") {
+		t.Errorf("expected valid verification, got code=%d out=%q", code, out)
+	}
+}
+
+// TestCLI_VerifyInvalid verifies rejection of an invalid token.
+func TestCLI_VerifyInvalid(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "alice")
+
+	_, _, code := runCLI(t, pass, vf, "verify", "alice", "000000")
+	if code != exitError {
+		t.Errorf("expected exit code %d for invalid token, got %d", exitError, code)
+	}
+}
+
+// TestCLI_ChangePassword verifies rotating master password and re-encrypting vault.
+func TestCLI_ChangePassword(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	oldPass := "oldpassword\n"
+	newPass := "newpassword\n"
+
+	runCLI(t, oldPass+oldPass, vf, "init")
+	runCLI(t, oldPass+"JBSWY3DPEHPK3PXP\n", vf, "add", "alice")
+
+	// Change password
+	_, _, code := runCLI(t, oldPass+newPass+newPass, vf, "change-password")
+	if code != exitOK {
+		t.Fatalf("change-password failed with exit code %d", code)
+	}
+
+	// Old password should now fail (exit code 3)
+	_, _, code = runCLI(t, oldPass, vf, "code", "alice")
+	if code != exitWrongPass {
+		t.Errorf("expected old password to fail with exit code %d, got %d", exitWrongPass, code)
+	}
+
+	// New password should succeed
+	_, _, code = runCLI(t, newPass, vf, "code", "alice")
+	if code != exitOK {
+		t.Errorf("expected new password to succeed with exit code %d, got %d", exitOK, code)
+	}
+}
+
+// TestCLI_Rename verifies renaming an existing account.
+func TestCLI_Rename(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "oldname")
+
+	// Rename
+	_, _, code := runCLI(t, pass, vf, "rename", "oldname", "newname")
+	if code != exitOK {
+		t.Fatalf("rename failed with exit code %d", code)
+	}
+
+	// Old name should now not be found (exit code 4)
+	_, _, code = runCLI(t, pass, vf, "code", "oldname")
+	if code != exitNotFound {
+		t.Errorf("expected old name to be not found (code %d), got %d", exitNotFound, code)
+	}
+
+	// New name should succeed
+	_, _, code = runCLI(t, pass, vf, "code", "newname")
+	if code != exitOK {
+		t.Errorf("expected new name to succeed (code %d), got %d", exitOK, code)
+	}
+}
+
+// TestCLI_Status verifies diagnostics output.
+func TestCLI_Status(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+
+	out, _, code := runCLI(t, "", vf, "status")
+	if code != exitOK {
+		t.Fatalf("status failed with exit code %d", code)
+	}
+	if !strings.Contains(out, "stdotp v1.0.0") || !strings.Contains(out, "PBKDF2-HMAC-SHA256") {
+		t.Errorf("status output missing expected diagnostic info: %q", out)
+	}
+}
+
+
 // ============================================================
 // Benchmarks (Performance & Allocation Metrics)
 // ============================================================

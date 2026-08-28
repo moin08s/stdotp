@@ -39,7 +39,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 9. [Performance Benchmarks & PBKDF2 Trade-Offs](#performance-benchmarks--pbkdf2-trade-offs)
 10. [Full 15-Package Substitution Matrix](#full-15-package-substitution-matrix)
 11. [Reproducible Build & Dependency Proof](#reproducible-build--dependency-proof)
-12. [RFC References & License](#rfc-references--license)
+12. [Side-Quest Write-Up & License](#side-quest-write-up--license)
 
 ---
 
@@ -60,6 +60,9 @@ go build -o stdotp .
 
 # 5. Generate a 6-digit TOTP code
 ./stdotp code github
+
+# 6. Verify an incoming 2FA token (server-side verification)
+./stdotp verify github 428157
 ```
 
 ---
@@ -223,7 +226,7 @@ $$\text{HOTP} = \text{CodeBinary} \bmod 10^{\text{Digits}}$$
 
 ### 3. Constant-Time Verification & Memory Zeroing
 
-- **Constant-Time Comparison**: `crypto/subtle.ConstantTimeCompare` is used during password confirmation to prevent timing side-channel attacks.
+- **Constant-Time Comparison**: `crypto/subtle.ConstantTimeCompare` is used during password confirmation and token verification to prevent timing side-channel attacks.
 - **Best-Effort Memory Zeroing**: Sensitive slices (master passwords, derived AES keys, intermediate salts, and decoded account secrets) are actively overwritten with zeros using `zeroBytes` deferred cleanup handlers upon exiting command scopes.
 
 ---
@@ -256,7 +259,7 @@ flowchart TD
 | Exit Code | Constant | Meaning | Defensive Action |
 |:---:|---|---|---|
 | `0` | `exitOK` | Success | Normal termination. |
-| `1` | `exitError` | General Error / Corrupt File | Hard stop; refuses silent auto-repair. |
+| `1` | `exitError` | General Error / Corrupt File / Invalid Token | Hard stop; refuses silent auto-repair. |
 | `2` | `exitUsage` | CLI Flag / Argument Error | Displays command help to `stderr`. |
 | `3` | `exitWrongPass` | Wrong Password / Tampered Ciphertext | Hard stop; emits zero partial plaintext. |
 | `4` | `exitNotFound` | Account Not Found | Explicit missing account alert. |
@@ -302,17 +305,30 @@ $ ./stdotp code github
 Master password:
 428157  (14s remaining)
 
-$ ./stdotp code github --json
+$ ./stdotp verify github 428157
 Master password:
-{"account":"github","code":"428157","seconds_remaining":14}
+Valid code (drift: 0 steps)
 
-$ ./stdotp export github
+$ ./stdotp rename github github-work
 Master password:
-otpauth://totp/github?secret=%5BREDACTED%5D
+Account "github" renamed to "github-work".
 
-$ ./stdotp export github --show-secret
-Master password:
-otpauth://totp/github?secret=JBSWY3DPEHPK3PXP
+$ ./stdotp status
+=== stdotp Status & Health Diagnostics ===
+Version:        stdotp v1.0.0 (windows/amd64, go1.27.0)
+Vault Path:     /home/user/.stdotp/vault.json
+Vault Size:     650 bytes (Last modified: 2026-08-29T01:55:00Z)
+KDF Algorithm:  PBKDF2-HMAC-SHA256 (600000 iterations)
+Format Version: v1
+System UTC:     2026-08-29T01:55:00Z
+TOTP Period:    30s window (Step: 58839000, 14s remaining)
+
+$ ./stdotp change-password --iterations=600000
+Current master password:
+Enter new master password:
+Confirm new master password:
+Re-encrypting vault...
+Vault password successfully changed (KDF iterations: 600000).
 
 $ ./stdotp self-test
 === stdotp In-Process Self-Test Suite ===
@@ -323,16 +339,7 @@ $ ./stdotp self-test
 [PASS] Google Authenticator otpauth:// URI parser & builder
 [PASS] Go 1.27 stdlib uuid (RFC 9562) generation
 All self-tests passed successfully.
-
-$ ./stdotp remove github
-Master password:
-Account "github" removed.
 ```
-
-### Stdio Stream Discipline
-- `stdout`: Strictly emits raw tokens, formatted tables, or machine-readable JSON.
-- `stderr`: Strictly receives interactive prompts, progress indicators, and errors.
-- **Pipeable**: `stdotp code github | clip` copies only the 6-digit code without prompts polluting the clipboard.
 
 ---
 
@@ -352,9 +359,6 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 - **Terminal Masking**: In strict compliance with zero-dependency rules, external packages (`golang.org/x/term`) are excluded. Password characters echo to the terminal as typed.
 - **Memory Hygiene**: In accordance with RFC 7914 §14, sensitive key material can persist in heap allocations due to Go's garbage collection lifecycle; `stdotp` applies best-effort zeroing to all sensitive byte slices.
 
-### 4. Air-Gap Verification
-`stdotp` contains zero networking code (`net/http` is absent). Verified by executing full lifecycle operations with all network adapters disabled.
-
 ---
 
 ## Automated Test Suite & Live Coverage
@@ -363,7 +367,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (31 Tests · 78.4% Coverage)
+### Test Results Breakdown (36 Tests · 77.3% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -399,8 +403,13 @@ $ go test -v -cover .
   [PASS] TestCLI_ListJSON             (JSON accounts array formatting)
   [PASS] TestCLI_CodeWithTime         (Deterministic --time override)
   [PASS] TestCLI_InitCustomIterations (Custom PBKDF2 iterations support)
+  [PASS] TestCLI_VerifyValid          (2FA Token verification)
+  [PASS] TestCLI_VerifyInvalid        (Invalid token rejection)
+  [PASS] TestCLI_ChangePassword       (Vault rekeying & password rotation)
+  [PASS] TestCLI_Rename               (Account renaming)
+  [PASS] TestCLI_Status               (Doctor / Diagnostics check)
 -------------------------------------------------------------------------------
-Result: 31 PASSED, 0 FAILED | Statement Coverage: 78.4%
+Result: 36 PASSED, 0 FAILED | Statement Coverage: 77.3%
 ```
 
 ---
@@ -417,10 +426,6 @@ $ go test -bench=. -benchmem -run=^$ .
 | `BenchmarkTOTP` (RFC 6238) | **1,111 ns/op** (~900,000 ops/sec) | 496 B/op | 9 allocs/op |
 | `BenchmarkVaultEncryptDecrypt` (AES-GCM) | **7,250 ns/op** (~138,000 ops/sec) | 3,665 B/op | 13 allocs/op |
 | `BenchmarkPBKDF2_100k` (100k iters) | **29.0 ms/op** (34.5 keys/sec) | 3.2 MB/op | 100,010 allocs/op |
-
-### PBKDF2 Latency Explanation
-- **600,000 iterations (Default)**: Takes ~175ms to derive the 32-byte key. This computational latency is deliberate: it forces an attacker with a GPU cluster to spend significant time per password guess, preventing high-speed offline dictionary attacks.
-- **100,000 iterations**: Takes ~29ms. Users on constrained systems can select this lower threshold using `stdotp init --iterations 100000`.
 
 ---
 
@@ -467,24 +472,15 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `971F579B9C0CD0A3CB690CE1AB4022E368AADB180D58EECE423572690D731FC5` |
-| Clean Directory Build 2 | `971F579B9C0CD0A3CB690CE1AB4022E368AADB180D58EECE423572690D731FC5` |
+| Clean Directory Build 1 | `42D0DB39EDCFD5C52ED22A7D4AC2DD0BFFAE98745F87004A0EB7B39E1A49344C` |
+| Clean Directory Build 2 | `42D0DB39EDCFD5C52ED22A7D4AC2DD0BFFAE98745F87004A0EB7B39E1A49344C` |
 
 - **Toolchain**: `Go 1.27`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).
 
 ---
 
-## RFC References & License
+## Side-Quest Write-Up & License
 
-1. M'Raihi, D., Bellare, M., Hoornaert, F., Naccache, D., and Ranen, O., *"HOTP: An HMAC-Based One-Time Password Algorithm"*, **RFC 4226**, December 2005.
-2. M'Raihi, D., Machani, S., Pei, M., and Rydell, J., *"TOTP: Time-Based One-Time Password Algorithm"*, **RFC 6238**, May 2011.
-3. Kaliski, B., *"PKCS #5: Password-Based Cryptography Specification Version 2.0"*, **RFC 2898**, September 2000.
-4. Percival, C. and Josefsson, S., *"The scrypt Password-Based Key Derivation Function"*, **RFC 7914, Section 12** ("Test Vectors for PBKDF2 with HMAC-SHA-256"), August 2016.
-5. Josefsson, S., *"The Base16, Base32, and Base64 Data Encodings"*, **RFC 4648**, October 2006.
-
----
-
-## License
-
-MIT License — see [LICENSE](LICENSE).
+- **Technical Deep-Dive Article**: See [`WRITEUP.md`](WRITEUP.md) for the $300 Hackathon Write-Up Side Quest.
+- **License**: MIT License — see [LICENSE](LICENSE).

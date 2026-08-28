@@ -625,11 +625,18 @@ Subcommands:
   code <name>                Generate the current TOTP/HOTP code
     --json                   Output as JSON {"account":...,"code":...,"seconds_remaining":...}
     --time <unix_or_rfc3339> Override time calculation (useful for step testing)
+  verify <name> <code>       Verify an incoming OTP token (server-side 2FA validation)
+    --window <steps>         Clock drift tolerance (0-5 steps, default: 1)
+    --json                   Output verification result as JSON
   list                       List all accounts in the vault
     --json                   Output all accounts as a JSON array
   remove <name>              Remove an account from the vault
+  rename <old> <new>         Rename an account in the vault
+  change-password            Rotate vault master password and re-encrypt
+    --iterations <count>     Update PBKDF2 iterations
   export <name>              Print the otpauth:// URI for an account
     --show-secret            Include the raw secret in the exported URI
+  status                     Display vault and system diagnostics (doctor mode)
   self-test                  Run in-process cryptographic & validation tests (Single File verification)
   version                    Display stdotp version and build details
 
@@ -683,12 +690,20 @@ func main() {
 		code = cmdAdd(subArgs)
 	case "code":
 		code = cmdCode(subArgs)
+	case "verify":
+		code = cmdVerify(subArgs)
 	case "list", "ls":
 		code = cmdList(subArgs)
 	case "remove", "rm":
 		code = cmdRemove(subArgs)
+	case "rename", "mv":
+		code = cmdRename(subArgs)
+	case "change-password", "rekey":
+		code = cmdChangePassword(subArgs)
 	case "export":
 		code = cmdExport(subArgs)
+	case "status", "doctor":
+		code = cmdStatus(subArgs)
 	case "self-test", "--self-test":
 		code = cmdSelfTest()
 	case "version", "--version", "-v":
@@ -1044,6 +1059,265 @@ func cmdCode(args []string) int {
 	return exitOK
 }
 
+// cmdVerify checks whether an incoming OTP token is valid for a given account.
+func cmdVerify(args []string) int {
+	fs := flag.NewFlagSet("verify", flag.ContinueOnError)
+	windowFlag := fs.Int("window", 1, "time step window drift tolerance (0-5 steps)")
+	asJSON := fs.Bool("json", false, "output result as JSON")
+	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp verify <name> <code> [--window <steps>] [--json]") }
+
+	var nonFlags []string
+	var flagArgs []string
+	for _, a := range args {
+		if !strings.HasPrefix(a, "-") && len(nonFlags) < 2 {
+			nonFlags = append(nonFlags, a)
+		} else {
+			flagArgs = append(flagArgs, a)
+		}
+	}
+	if len(nonFlags) < 2 {
+		fs.Usage()
+		return exitUsage
+	}
+	if err := fs.Parse(flagArgs); err != nil {
+		return exitUsage
+	}
+
+	name := nonFlags[0]
+	inputCode := nonFlags[1]
+
+	fmt.Fprint(os.Stderr, "Master password: ")
+	password, err := readLine()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return exitError
+	}
+	defer zeroBytes([]byte(password))
+
+	data, key, salt, err := loadVault(globalVaultPath, password)
+	if err != nil {
+		return vaultErrCode(err)
+	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
+	defer func() {
+		for i := range data.Accounts {
+			zeroBytes([]byte(data.Accounts[i].Secret))
+		}
+	}()
+
+	account, ok := findAccount(data, name)
+	if !ok {
+		fmt.Fprintf(os.Stderr, "error: account %q not found\n", name)
+		return exitNotFound
+	}
+
+	secret, err := decodeSecret(account.Secret)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error decoding secret: %v\n", err)
+		return exitError
+	}
+	defer zeroBytes(secret)
+
+	digits := account.Digits
+	if digits == 0 {
+		digits = 6
+	}
+	period := account.Period
+	if period == 0 {
+		period = 30
+	}
+	algo := account.Algorithm
+	if algo == "" {
+		algo = "SHA1"
+	}
+
+	if strings.EqualFold(account.Type, "hotp") {
+		expected := hotp(secret, account.Counter, digits, algo)
+		valid := (subtle.ConstantTimeCompare([]byte(expected), []byte(inputCode)) == 1)
+		if valid {
+			if *asJSON {
+				fmt.Printf(`{"account":%q,"valid":true,"type":"hotp","counter":%d}`+"\n", name, account.Counter)
+			} else {
+				fmt.Printf("Valid code for HOTP counter %d\n", account.Counter)
+			}
+			return exitOK
+		}
+		if *asJSON {
+			fmt.Printf(`{"account":%q,"valid":false}`+"\n", name)
+		} else {
+			fmt.Fprintln(os.Stderr, "Invalid code")
+		}
+		return exitError
+	}
+
+	now := time.Now()
+	currentCounter := int64(now.Unix() / int64(period))
+	w := *windowFlag
+	if w < 0 {
+		w = 0
+	} else if w > 5 {
+		w = 5
+	}
+
+	matchDrift := 0
+	matched := false
+
+	for drift := -w; drift <= w; drift++ {
+		stepCounter := uint64(currentCounter + int64(drift))
+		candidate := hotp(secret, stepCounter, digits, algo)
+		if subtle.ConstantTimeCompare([]byte(candidate), []byte(inputCode)) == 1 {
+			matched = true
+			matchDrift = drift
+			break
+		}
+	}
+
+	if matched {
+		if *asJSON {
+			fmt.Printf(`{"account":%q,"valid":true,"drift_steps":%d}`+"\n", name, matchDrift)
+		} else {
+			fmt.Printf("Valid code (drift: %d steps)\n", matchDrift)
+		}
+		return exitOK
+	}
+
+	if *asJSON {
+		fmt.Printf(`{"account":%q,"valid":false}`+"\n", name)
+	} else {
+		fmt.Fprintln(os.Stderr, "Invalid code")
+	}
+	return exitError
+}
+
+// cmdChangePassword rotates the master password and re-encrypts the vault.
+func cmdChangePassword(args []string) int {
+	fs := flag.NewFlagSet("change-password", flag.ContinueOnError)
+	itersFlag := fs.Int("iterations", 0, "new PBKDF2 iterations (0 keeps existing count)")
+	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp change-password [--iterations <n>]") }
+	if err := fs.Parse(args); err != nil {
+		return exitUsage
+	}
+
+	fmt.Fprint(os.Stderr, "Current master password: ")
+	oldPassword, err := readLine()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return exitError
+	}
+	defer zeroBytes([]byte(oldPassword))
+
+	data, oldKey, _, err := loadVault(globalVaultPath, oldPassword)
+	if err != nil {
+		return vaultErrCode(err)
+	}
+	defer zeroBytes(oldKey)
+
+	fmt.Fprint(os.Stderr, "Enter new master password: ")
+	newPassword, err := readLine()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return exitError
+	}
+	if newPassword == "" {
+		fmt.Fprintln(os.Stderr, "error: password must not be empty")
+		return exitError
+	}
+	defer zeroBytes([]byte(newPassword))
+
+	fmt.Fprint(os.Stderr, "Confirm new master password: ")
+	confirm, err := readLine()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return exitError
+	}
+	defer zeroBytes([]byte(confirm))
+
+	if subtle.ConstantTimeCompare([]byte(newPassword), []byte(confirm)) != 1 {
+		fmt.Fprintln(os.Stderr, "error: passwords do not match")
+		return exitError
+	}
+
+	newIters := vaultKDFIterations
+	if *itersFlag > 0 {
+		newIters = *itersFlag
+	}
+	if newIters < 1000 || newIters > 10_000_000 {
+		fmt.Fprintf(os.Stderr, "error: iterations must be between 1,000 and 10,000,000 (got %d)\n", newIters)
+		return exitUsage
+	}
+
+	newSalt := make([]byte, vaultSaltLen)
+	if _, err = io.ReadFull(rand.Reader, newSalt); err != nil {
+		fmt.Fprintf(os.Stderr, "error generating new salt: %v\n", err)
+		return exitError
+	}
+
+	fmt.Fprintln(os.Stderr, "Re-encrypting vault...")
+	newKey := deriveKey(newPassword, newSalt, newIters)
+	defer zeroBytes(newKey)
+
+	if err = saveVault(globalVaultPath, data, newKey, newSalt, newIters); err != nil {
+		fmt.Fprintf(os.Stderr, "error saving re-encrypted vault: %v\n", err)
+		return exitError
+	}
+
+	fmt.Fprintf(os.Stderr, "Vault password successfully changed (KDF iterations: %d).\n", newIters)
+	return exitOK
+}
+
+// cmdRename renames an existing account in the vault.
+func cmdRename(args []string) int {
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: stdotp rename <old_name> <new_name>")
+		return exitUsage
+	}
+	oldName, newName := args[0], args[1]
+
+	fmt.Fprint(os.Stderr, "Master password: ")
+	password, err := readLine()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		return exitError
+	}
+	defer zeroBytes([]byte(password))
+
+	data, key, salt, err := loadVault(globalVaultPath, password)
+	if err != nil {
+		return vaultErrCode(err)
+	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
+
+	for _, a := range data.Accounts {
+		if a.Name == newName {
+			fmt.Fprintf(os.Stderr, "error: account %q already exists\n", newName)
+			return exitError
+		}
+	}
+
+	idx := -1
+	for i, a := range data.Accounts {
+		if a.Name == oldName {
+			idx = i
+			break
+		}
+	}
+	if idx < 0 {
+		fmt.Fprintf(os.Stderr, "error: account %q not found\n", oldName)
+		return exitNotFound
+	}
+
+	data.Accounts[idx].Name = newName
+	if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
+		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
+		return exitError
+	}
+
+	fmt.Fprintf(os.Stderr, "Account %q renamed to %q.\n", oldName, newName)
+	return exitOK
+}
+
 // cmdList prints all accounts in a tabular format or as JSON.
 func cmdList(args []string) int {
 	fs := flag.NewFlagSet("list", flag.ContinueOnError)
@@ -1211,6 +1485,41 @@ func cmdExport(args []string) int {
 
 	// Only the URI itself goes to stdout; the password prompt went to stderr.
 	fmt.Println(buildOTPAuthURI(account, *showSecret))
+	return exitOK
+}
+
+// cmdStatus prints diagnostics and health status of the vault and authenticator.
+func cmdStatus(args []string) int {
+	fmt.Println("=== stdotp Status & Health Diagnostics ===")
+	fmt.Printf("Version:        stdotp v%s (%s/%s, %s)\n", AppVersion, runtime.GOOS, runtime.GOARCH, runtime.Version())
+	fmt.Printf("Vault Path:     %s\n", globalVaultPath)
+
+	info, err := os.Stat(globalVaultPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("Vault State:    NOT INITIALIZED (Run 'stdotp init')")
+			return exitOK
+		}
+		fmt.Printf("Vault Error:    %v\n", err)
+		return exitError
+	}
+	fmt.Printf("Vault Size:     %d bytes (Last modified: %s)\n", info.Size(), info.ModTime().UTC().Format(time.RFC3339))
+
+	raw, err := os.ReadFile(globalVaultPath)
+	if err == nil {
+		var vf VaultFile
+		if json.Unmarshal(raw, &vf) == nil {
+			fmt.Printf("KDF Algorithm:  %s (%d iterations)\n", vf.KDF, vf.KDFIterations)
+			fmt.Printf("Format Version: v%d\n", vf.FormatVersion)
+		}
+	}
+
+	now := time.Now().UTC()
+	period := 30
+	elapsed := int(now.Unix() % int64(period))
+	secsLeft := period - elapsed
+	fmt.Printf("System UTC:     %s\n", now.Format(time.RFC3339))
+	fmt.Printf("TOTP Period:    30s window (Step: %d, %ds remaining)\n", now.Unix()/int64(period), secsLeft)
 	return exitOK
 }
 
