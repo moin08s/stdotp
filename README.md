@@ -26,7 +26,8 @@ go build -o stdotp .
 | **Atomic writes** | temp file → sync → os.Rename — crash-safe |
 | **otpauth:// interop** | import from and export to Google Authenticator |
 | **Air-gapped** | zero network calls; verified with no internet connection |
-| **Zero runtime deps** | only the Go standard library; empty equire block in go.mod |
+| **Zero runtime deps** | only the Go standard library; empty 
+equire block in go.mod |
 | **Extensive Test Suite** | 26 automated tests (RFC vectors + CLI integration, 76.2% coverage) |
 
 ---
@@ -174,7 +175,8 @@ only for scripting convenience.
 
 ### Air-gap verification
 
-All six subcommands (init, dd, code, list, emove, export) operate with
+All six subcommands (init, dd, code, list, 
+emove, export) operate with
 no network calls. Verified by running with network access blocked on Windows and Linux
 — every command completes normally.
 
@@ -248,8 +250,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build | SHA-256 |
 |---|---|
-| Build 1 | 0DC02EF65B08A38421134687676A9D377D3746259F33151B56ABCEC8B32BC43D |
-| Build 2 | 0DC02EF65B08A38421134687676A9D377D3746259F33151B56ABCEC8B32BC43D |
+| Build 1 | 76D4DE16E7DB403F06F809F11869B47D3C899031816E83CCDFD96EBE77B4F162 |
+| Build 2 | 76D4DE16E7DB403F06F809F11869B47D3C899031816E83CCDFD96EBE77B4F162 |
 
 Go version: go1.27.0 windows/amd64
 
