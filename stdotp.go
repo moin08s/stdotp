@@ -1453,14 +1453,23 @@ func cmdExport(args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: stdotp export <name> [--show-secret]")
 	}
-	if err := fs.Parse(args); err != nil {
-		return exitUsage
+	var name string
+	var flagArgs []string
+	for i, a := range args {
+		if !strings.HasPrefix(a, "-") && name == "" {
+			name = a
+			flagArgs = append(flagArgs, args[i+1:]...)
+			break
+		}
+		flagArgs = append(flagArgs, a)
 	}
-	if fs.NArg() < 1 {
+	if name == "" {
 		fs.Usage()
 		return exitUsage
 	}
-	name := fs.Arg(0)
+	if err := fs.Parse(flagArgs); err != nil {
+		return exitUsage
+	}
 
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()

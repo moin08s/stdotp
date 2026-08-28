@@ -39,7 +39,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 9. [Performance Benchmarks & PBKDF2 Trade-Offs](#performance-benchmarks--pbkdf2-trade-offs)
 10. [Full 15-Package Substitution Matrix](#full-15-package-substitution-matrix)
 11. [Reproducible Build & Dependency Proof](#reproducible-build--dependency-proof)
-12. [Side-Quest Write-Up & License](#side-quest-write-up--license)
+12. [Demo Script, Side-Quest & License](#demo-script-side-quest--license)
 
 ---
 
@@ -367,7 +367,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (36 Tests · 77.3% Coverage)
+### Test Results Breakdown (43 Tests · 79.7% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -408,8 +408,15 @@ $ go test -v -cover .
   [PASS] TestCLI_ChangePassword       (Vault rekeying & password rotation)
   [PASS] TestCLI_Rename               (Account renaming)
   [PASS] TestCLI_Status               (Doctor / Diagnostics check)
+  [PASS] TestCLI_AddViaSecretFlag     (Add via --secret flag)
+  [PASS] TestCLI_AddViaSecretFile     (Add via --secret-file)
+  [PASS] TestCLI_AddViaURIFile        (Add via --uri-file)
+  [PASS] TestCLI_VerifyHOTP           (HOTP verification)
+  [PASS] TestCLI_ChangePasswordMismatch (Password mismatch handling)
+  [PASS] TestCLI_RenameDuplicate      (Duplicate name prevention in rename)
+  [PASS] TestCLI_ExportShowSecret     (Export with --show-secret)
 -------------------------------------------------------------------------------
-Result: 36 PASSED, 0 FAILED | Statement Coverage: 77.3%
+Result: 43 PASSED, 0 FAILED | Statement Coverage: 79.7%
 ```
 
 ---
@@ -472,15 +479,16 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `42D0DB39EDCFD5C52ED22A7D4AC2DD0BFFAE98745F87004A0EB7B39E1A49344C` |
-| Clean Directory Build 2 | `42D0DB39EDCFD5C52ED22A7D4AC2DD0BFFAE98745F87004A0EB7B39E1A49344C` |
+| Clean Directory Build 1 | `59E0BBD23FC7E019E6A9E7E0FF6981AA9EB69D9B50A7ED71D35C2EF3968112D9` |
+| Clean Directory Build 2 | `59E0BBD23FC7E019E6A9E7E0FF6981AA9EB69D9B50A7ED71D35C2EF3968112D9` |
 
 - **Toolchain**: `Go 1.27`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).
 
 ---
 
-## Side-Quest Write-Up & License
+## Demo Script, Side-Quest & License
 
+- **5-Minute Video Recording Walkthrough**: See [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
 - **Technical Deep-Dive Article**: See [`WRITEUP.md`](WRITEUP.md) for the $300 Hackathon Write-Up Side Quest.
 - **License**: MIT License — see [LICENSE](LICENSE).

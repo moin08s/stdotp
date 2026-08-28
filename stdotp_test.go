@@ -930,6 +930,117 @@ func TestCLI_Status(t *testing.T) {
 	}
 }
 
+// TestCLI_AddViaSecretFlag verifies adding an account using --secret.
+func TestCLI_AddViaSecretFlag(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	_, _, code := runCLI(t, pass, vf, "add", "flagacc", "--secret=JBSWY3DPEHPK3PXP")
+	if code != exitOK {
+		t.Fatalf("add --secret failed with exit code %d", code)
+	}
+}
+
+// TestCLI_AddViaSecretFile verifies adding an account using --secret-file.
+func TestCLI_AddViaSecretFile(t *testing.T) {
+	dir := t.TempDir()
+	vf := "--vault=" + filepath.Join(dir, "vault.json")
+	pass := "pass\n"
+	secretFile := filepath.Join(dir, "secret.txt")
+	if err := os.WriteFile(secretFile, []byte("JBSWY3DPEHPK3PXP\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	runCLI(t, pass+pass, vf, "init")
+	_, _, code := runCLI(t, pass, vf, "add", "fileacc", "--secret-file="+secretFile)
+	if code != exitOK {
+		t.Fatalf("add --secret-file failed with exit code %d", code)
+	}
+}
+
+// TestCLI_AddViaURIFile verifies adding an account using --uri-file.
+func TestCLI_AddViaURIFile(t *testing.T) {
+	dir := t.TempDir()
+	vf := "--vault=" + filepath.Join(dir, "vault.json")
+	pass := "pass\n"
+	uriFile := filepath.Join(dir, "uri.txt")
+	if err := os.WriteFile(uriFile, []byte("otpauth://totp/fileuri?secret=JBSWY3DPEHPK3PXP\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	runCLI(t, pass+pass, vf, "init")
+	_, _, code := runCLI(t, pass, vf, "add", "fileuriacc", "--uri-file="+uriFile)
+	if code != exitOK {
+		t.Fatalf("add --uri-file failed with exit code %d", code)
+	}
+}
+
+// TestCLI_VerifyHOTP verifies verifying an HOTP code.
+func TestCLI_VerifyHOTP(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass, vf, "add", "hotpacc", "--uri=otpauth://hotp/hotpacc?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=0")
+
+	// Counter 0: expected 755224
+	out, _, code := runCLI(t, pass, vf, "verify", "hotpacc", "755224")
+	if code != exitOK || !strings.Contains(out, "Valid code") {
+		t.Errorf("expected valid HOTP verify, got code=%d out=%q", code, out)
+	}
+
+	// Invalid code
+	_, _, code = runCLI(t, pass, vf, "verify", "hotpacc", "000000")
+	if code != exitError {
+		t.Errorf("expected invalid HOTP verify exit %d, got %d", exitError, code)
+	}
+}
+
+// TestCLI_ChangePasswordMismatch verifies rejection of mismatched passwords.
+func TestCLI_ChangePasswordMismatch(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	oldPass := "oldpassword\n"
+
+	runCLI(t, oldPass+oldPass, vf, "init")
+	_, _, code := runCLI(t, oldPass+"new1\n"+"new2\n", vf, "change-password")
+	if code != exitError {
+		t.Errorf("expected exitError for mismatched passwords, got %d", code)
+	}
+}
+
+// TestCLI_RenameDuplicate verifies rejection when new account name already exists.
+func TestCLI_RenameDuplicate(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "acc1")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "acc2")
+
+	_, _, code := runCLI(t, pass, vf, "rename", "acc1", "acc2")
+	if code != exitError {
+		t.Errorf("expected exitError when renaming to existing account, got %d", code)
+	}
+}
+
+// TestCLI_ExportShowSecret verifies export with --show-secret.
+func TestCLI_ExportShowSecret(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "exp")
+
+	out, _, code := runCLI(t, pass, vf, "export", "exp", "--show-secret")
+	if code != exitOK {
+		t.Fatalf("export failed: %d", code)
+	}
+	if !strings.Contains(out, "secret=JBSWY3DPEHPK3PXP") {
+		t.Errorf("expected raw secret in export, got: %q", out)
+	}
+}
+
 // ============================================================
 // Benchmarks (Performance & Allocation Metrics)
 // ============================================================
