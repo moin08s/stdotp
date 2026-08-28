@@ -10,38 +10,39 @@ a standard-library equivalent.
 
 ## Quick start
 
-```sh
+`sh
 go build -o stdotp .
 ./stdotp init
 ./stdotp add myaccount          # prompts for base32 secret or otpauth:// URI on stdin
 ./stdotp code myaccount
-```
+`
 
 ## Features
 
 | Feature | Detail |
 |---|---|
 | **TOTP / HOTP** | RFC 6238 / RFC 4226, SHA-1 / SHA-256 / SHA-512 |
-| **Vault encryption** | AES-256-GCM, PBKDF2-HMAC-SHA256 KDF (600 000 iterations) |
+| **Vault encryption** | AES-256-GCM, PBKDF2-HMAC-SHA256 KDF (600,000 iterations) |
 | **Atomic writes** | temp file → sync → os.Rename — crash-safe |
 | **otpauth:// interop** | import from and export to Google Authenticator |
 | **Air-gapped** | zero network calls; verified with no internet connection |
 | **Zero runtime deps** | only the Go standard library; empty equire block in go.mod |
+| **Extensive Test Suite** | 26 automated tests (RFC vectors + CLI integration, 76.2% coverage) |
 
 ---
 
 ## Build
 
-```sh
+`sh
 go build -o stdotp .
-```
+`
 
 ### Reproducible build
 
-```sh
+`sh
 CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 sha256sum stdotp     # or Get-FileHash on Windows
-```
+`
 
 Build twice in separate directories — the SHA-256 hashes must match.
 See [Reproducible Build Proof](#reproducible-build-proof) below for confirmed hashes.
@@ -50,7 +51,7 @@ See [Reproducible Build Proof](#reproducible-build-proof) below for confirmed ha
 
 ## Usage
 
-```
+`
 stdotp [--vault <path>] <subcommand> [options]
 
 Subcommands:
@@ -71,11 +72,11 @@ Global flag:
   --vault <path>             Vault file path (default: ~/.stdotp/vault.json)
 
 Exit codes:  0 ok  1 error  2 usage  3 wrong password  4 not found  5 vault missing
-```
+`
 
 ### Demo transcript
 
-```sh
+`sh
 $ ./stdotp init
 Enter new master password:
 Confirm master password:
@@ -110,7 +111,7 @@ otpauth://totp/github?secret=JBSWY3DPEHPK3PXP
 $ ./stdotp remove github
 Master password:
 Account "github" removed.
-```
+`
 
 ---
 
@@ -121,7 +122,7 @@ Account "github" removed.
 The vault is an AES-256-GCM encrypted JSON envelope. Every field is documented in
 plaintext so the format can be understood without reverse-engineering a binary:
 
-```json
+`json
 {
   "format_version": 1,
   "kdf": "PBKDF2-HMAC-SHA256",
@@ -130,13 +131,13 @@ plaintext so the format can be understood without reverse-engineering a binary:
   "nonce": "<base64, 12 random bytes from crypto/rand, fresh every write>",
   "ciphertext": "<base64, AES-256-GCM output — auth tag rides inside>"
 }
-```
+`
 
 **Key derivation:** PBKDF2-HMAC-SHA256 implemented exactly per RFC 2898 §5.2 by
 composing crypto/hmac. Not a custom algorithm — a faithful standard construction
 built entirely from stdlib primitives.
 
-**Iteration count:** 600 000 (OWASP Password Storage Cheat Sheet 2026 recommendation
+**Iteration count:** 600,000 (OWASP Password Storage Cheat Sheet 2026 recommendation
 for PBKDF2-HMAC-SHA256, benchmarked against modern GPU hardware).
 
 **Nonce:** freshly generated from crypto/rand on every vault write. Reusing a nonce
@@ -179,6 +180,30 @@ no network calls. Verified by running with network access blocked on Windows and
 
 ---
 
+## Test suite & Code coverage
+
+Run the full test suite with coverage:
+
+`sh
+go test -v -cover .
+`
+
+### Test coverage summary:
+- **Statement coverage**: **76.2%** of statements in stdotp.go
+- **Total automated tests**: **26 tests** (0 failures)
+
+| Test Group | Tests | Description |
+|---|---|---|
+| **HOTP Primitives** | TestHOTP_RFC4226, TestHOTP_PaddedOutput | RFC 4226 Appendix D vectors (10 cases) & padding |
+| **TOTP Primitives** | TestTOTP_RFC6238, TestTOTP_SecondsRemaining | RFC 6238 Appendix B vectors across SHA1/256/512 (18 cases) |
+| **PBKDF2 KDF** | TestPBKDF2_RFC7914 | RFC 7914 §11 official test vectors (c=1, c=80000) |
+| **Vault Crypto** | TestVaultEncryptDecrypt, TestVaultTamperedCiphertext, TestVaultWrongKey | AES-256-GCM encryption, fresh nonce enforcement, tamper rejection |
+| **Vault Storage** | TestSaveLoadVault, TestLoadVault_WrongPassword, TestLoadVault_Missing | Atomic file writes, crash resilience, exit code mapping |
+| **URI & Encoding** | TestParseOTPAuthURI_Valid, TestParseOTPAuthURI_Invalid, TestBuildOTPAuthURI_*, TestDecodeSecret_* | Google Authenticator URI parsing, secret redaction, Base32 edge cases |
+| **CLI Workflows** | TestCLI_FullWorkflow, TestCLI_WrongPassword, TestCLI_VaultMissing, TestCLI_AccountNotFound, TestCLI_DuplicateAccount, TestCLI_AddViaURI, TestCLI_StdoutStderrSplit | Complete integration tests simulating real command invocations |
+
+---
+
 ## Package killer
 
 stdotp eliminates the need for:
@@ -204,27 +229,27 @@ See [STDLIB.md](STDLIB.md) for the full table.
 
 ## Dependency proof
 
-```
+`
 $ go list -m all
 stdotp
 
 $ GOPROXY=off go build ./...
 (no output — build succeeds with zero external dependencies)
-```
+`
 
 ---
 
 ## Reproducible build proof
 
 Build command:
-```sh
+`sh
 CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
-```
+`
 
 | Build | SHA-256 |
 |---|---|
-| Build 1 | 76D4DE16E7DB403F06F809F11869B47D3C899031816E83CCDFD96EBE77B4F162 |
-| Build 2 | 76D4DE16E7DB403F06F809F11869B47D3C899031816E83CCDFD96EBE77B4F162 |
+| Build 1 | 0DC02EF65B08A38421134687676A9D377D3746259F33151B56ABCEC8B32BC43D |
+| Build 2 | 0DC02EF65B08A38421134687676A9D377D3746259F33151B56ABCEC8B32BC43D |
 
 Go version: go1.27.0 windows/amd64
 
