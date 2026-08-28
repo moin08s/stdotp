@@ -403,11 +403,19 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 		tmp.Close()
 		return fmt.Errorf("fsync temp file: %w", err)
 	}
+	if err = tmp.Chmod(0600); err != nil {
+		// Non-fatal on filesystems that do not support POSIX chmod (e.g. FAT32)
+	}
 	if err = tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
 	}
 	if err = os.Rename(tmpPath, path); err != nil {
 		return fmt.Errorf("rename vault file: %w", err)
+	}
+	// Sync parent directory for true crash durability on POSIX filesystems
+	if dirFile, dirErr := os.Open(dir); dirErr == nil {
+		_ = dirFile.Sync()
+		_ = dirFile.Close()
 	}
 	ok = true
 	return nil
@@ -447,10 +455,21 @@ func parseOTPAuthURI(uri string) (Account, error) {
 		accountName = strings.TrimSpace(label)
 	}
 
-	q := u.Query()
+	// Case-insensitive query parameter lookup
+	getQuery := func(key string) string {
+		for k, v := range u.Query() {
+			if strings.EqualFold(k, key) && len(v) > 0 {
+				return v[0]
+			}
+		}
+		return ""
+	}
 
-	// secret (required) — strip padding, normalise to upper-case.
-	secret := strings.ToUpper(strings.TrimRight(q.Get("secret"), "="))
+	// secret (required) — strip spaces, hyphens, padding, normalise to upper-case.
+	secretRaw := getQuery("secret")
+	secretRaw = strings.ReplaceAll(secretRaw, " ", "")
+	secretRaw = strings.ReplaceAll(secretRaw, "-", "")
+	secret := strings.ToUpper(strings.TrimRight(secretRaw, "="))
 	if secret == "" {
 		return Account{}, errors.New("otpauth URI missing required 'secret' parameter")
 	}
@@ -463,7 +482,7 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	}
 
 	// algorithm (optional, default SHA1)
-	algo := strings.ToUpper(q.Get("algorithm"))
+	algo := strings.ToUpper(getQuery("algorithm"))
 	if algo == "" {
 		algo = "SHA1"
 	}
@@ -475,7 +494,7 @@ func parseOTPAuthURI(uri string) (Account, error) {
 
 	// digits (optional, default 6)
 	digits := 6
-	if d := q.Get("digits"); d != "" {
+	if d := getQuery("digits"); d != "" {
 		digits, err = strconv.Atoi(d)
 		if err != nil || digits < 6 || digits > 8 {
 			return Account{}, fmt.Errorf("invalid digits: %q (want 6, 7, or 8)", d)
@@ -484,7 +503,7 @@ func parseOTPAuthURI(uri string) (Account, error) {
 
 	// period (TOTP, optional, default 30)
 	period := 30
-	if p := q.Get("period"); p != "" {
+	if p := getQuery("period"); p != "" {
 		period, err = strconv.Atoi(p)
 		if err != nil || period < 5 || period > 300 {
 			return Account{}, fmt.Errorf("invalid period: %q (must be between 5 and 300 seconds)", p)
@@ -492,14 +511,14 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	}
 
 	// issuer query parameter takes precedence over issuer in the label.
-	if qi := q.Get("issuer"); qi != "" {
+	if qi := getQuery("issuer"); qi != "" {
 		issuer = qi
 	}
 
 	// counter (HOTP, required for hotp type)
 	var counter uint64
 	if otpType == "hotp" {
-		c := q.Get("counter")
+		c := getQuery("counter")
 		if c == "" {
 			return Account{}, errors.New("hotp URI requires 'counter' parameter")
 		}
@@ -570,8 +589,11 @@ func buildOTPAuthURI(a Account, showSecret bool) string {
 	return u.String()
 }
 
-// decodeSecret base32-decodes a secret string, tolerating missing padding.
+// decodeSecret base32-decodes a secret string, tolerating spaces, hyphens, and missing padding.
 func decodeSecret(s string) ([]byte, error) {
+	s = strings.ReplaceAll(s, " ", "")
+	s = strings.ReplaceAll(s, "-", "")
+	s = strings.ReplaceAll(s, "\t", "")
 	s = strings.ToUpper(strings.TrimRight(s, "="))
 	if s == "" {
 		return nil, errors.New("empty secret")

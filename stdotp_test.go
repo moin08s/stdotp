@@ -1041,6 +1041,53 @@ func TestCLI_ExportShowSecret(t *testing.T) {
 	}
 }
 
+// TestDecodeSecret_Sanitization verifies spaces, tabs, and hyphens are stripped.
+func TestDecodeSecret_Sanitization(t *testing.T) {
+	raw := "JBSW-Y3DP EHPK\t3PXP"
+	dec, err := decodeSecret(raw)
+	if err != nil {
+		t.Fatalf("failed to decode formatted secret: %v", err)
+	}
+	cleanDec, _ := decodeSecret("JBSWY3DPEHPK3PXP")
+	if string(dec) != string(cleanDec) {
+		t.Errorf("sanitization mismatch: got %q, want %q", dec, cleanDec)
+	}
+}
+
+// TestParseOTPAuthURI_CaseInsensitiveQuery verifies case-insensitive query parameter handling.
+func TestParseOTPAuthURI_CaseInsensitiveQuery(t *testing.T) {
+	uri := "otpauth://totp/Test:User?SECRET=JBSWY3DPEHPK3PXP&DIGITS=8&PERIOD=60&ALGORITHM=SHA256&ISSUER=Test"
+	acc, err := parseOTPAuthURI(uri)
+	if err != nil {
+		t.Fatalf("failed to parse uppercase query URI: %v", err)
+	}
+	if acc.Digits != 8 || acc.Period != 60 || acc.Algorithm != "SHA256" || acc.Issuer != "Test" {
+		t.Errorf("unexpected parsed fields: %+v", acc)
+	}
+}
+
+// TestCLI_HOTPCounterProgression verifies that generating HOTP codes increments the stored counter.
+func TestCLI_HOTPCounterProgression(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init")
+	// Add HOTP account at counter 0 (RFC 4226 Appendix D: counter 0 -> 755224, counter 1 -> 287082)
+	runCLI(t, pass, vf, "add", "hotp_seq", "--uri=otpauth://hotp/hotp_seq?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=0")
+
+	// First code call: should generate 755224 and advance counter to 1
+	out1, _, code1 := runCLI(t, pass, vf, "code", "hotp_seq")
+	if code1 != exitOK || !strings.Contains(out1, "755224") {
+		t.Fatalf("first HOTP code got code=%d out=%q, want 755224", code1, out1)
+	}
+
+	// Second code call: should generate 287082 and advance counter to 2
+	out2, _, code2 := runCLI(t, pass, vf, "code", "hotp_seq")
+	if code2 != exitOK || !strings.Contains(out2, "287082") {
+		t.Fatalf("second HOTP code got code=%d out=%q, want 287082", code2, out2)
+	}
+}
+
 // ============================================================
 // Benchmarks (Performance & Allocation Metrics)
 // ============================================================

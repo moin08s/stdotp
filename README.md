@@ -15,7 +15,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 | **Never Rolls Its Own Cipher** | Composes `crypto/aes` + `crypto/cipher` (AES-256-GCM) and `crypto/hmac` (PBKDF2 per RFC 2898 §5.2). | ✅ **Verified** |
 | **Handles Key Material Defensibly** | AES-256-GCM at rest, 12-byte CSPRNG fresh nonces, configurable PBKDF2 iterations (default 600,000 per OWASP 2026), best-effort memory zeroing. | ✅ **Verified** |
 | **Fails Safe (§2.2)** | Auth tag failure → exit 3 (no partial plaintext); corrupt vault → exit 1; missing vault → exit 5. | ✅ **Verified** |
-| **Atomic File Operations** | Temp file (`.stdotp-UUID-*.tmp` via stdlib `uuid`) $\rightarrow$ `fsync` $\rightarrow$ `os.Rename` (crash & power-loss safe). | ✅ **Verified** |
+| **Atomic File Operations** | Temp file (`.stdotp-UUID-*.tmp` via stdlib `uuid`) $\rightarrow$ `fsync` $\rightarrow$ `chmod 0600` $\rightarrow$ `os.Rename` $\rightarrow$ dir sync. | ✅ **Verified** |
 | **Air-Gapped Operation** | Zero network calls; `net/http` is completely absent from the runtime. | ✅ **Verified** |
 | **Single File Bonus (+5)** | Core implementation in `stdotp.go` + built-in `stdotp self-test` for standalone single-binary verification. | 🎯 **Targeted (+5)** |
 | **Reproducible Build (+5)** | Bit-for-bit identical SHA-256 hashes across independent builds (`-trimpath -ldflags="-buildid="`). | 🎯 **Targeted (+5)** |
@@ -168,7 +168,7 @@ flowchart TD
         AESGCM --> EncryptedEnvelope["Encrypted Envelope JSON<br/>{ salt, nonce, ciphertext + auth_tag }"]
     end
 
-    EncryptedEnvelope --> AtomicWrite["Atomic Write Pipeline<br/>(Write .tmp -> fsync -> os.Rename)"]
+    EncryptedEnvelope --> AtomicWrite["Atomic Write Pipeline<br/>(Write .tmp -> fsync -> chmod 0600 -> os.Rename -> dir sync)"]
 ```
 
 #### Key Derivation Function (PBKDF2-HMAC-SHA256)
@@ -179,7 +179,7 @@ $$U_1 = \text{PRF}(\text{Password}, \text{Salt} \parallel \text{INT}(i))$$
 $$U_j = \text{PRF}(\text{Password}, U_{j-1}) \quad \text{for } j = 2 \dots c$$
 
 - **Iterations ($c$)**: `600,000` default (OWASP 2026 Password Storage recommendation for modern GPU resilience), configurable via `--iterations` upon initialization.
-- **Zero-Allocation Inner Loop**: Reuses slice buffers (`uBuf[:0]`) to completely eliminate heap allocation overhead in the derivation loop.
+- **Zero-Allocation Inner Loop**: Reuses slice buffers (`uBuf[:0]`) to completely eliminate heap allocation overhead in the derivation loop (800 B/op and 11 allocs/op in benchmarks).
 - **Verification**: Validated against official **RFC 7914 §12** test vectors ($c=1$ and $c=80,000$).
 
 #### Authenticated Cipher (AES-256-GCM)
@@ -245,8 +245,10 @@ flowchart TD
     GenNonce --> EncryptGCM[Seal with AES-256-GCM]
     EncryptGCM --> WriteTmp[Write to .stdotp-UUID-*.tmp]
     WriteTmp --> Fsync[fsync / File Sync]
-    Fsync --> Rename[os.Rename over real vault path]
-    Rename --> Exit0
+    Fsync --> Chmod[chmod 0600]
+    Chmod --> Rename[os.Rename over real vault path]
+    Rename --> DirSync[dir.Sync / Directory Sync]
+    DirSync --> Exit0
 ```
 
 ### Exit Codes Contract
@@ -361,7 +363,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (43 Tests · 79.1% Coverage)
+### Test Results Breakdown (46 Tests · 80.3% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -383,6 +385,8 @@ $ go test -v -cover .
   [PASS] TestDecodeSecret_EmptyString (Empty input boundary check)
   [PASS] TestTOTP_SecondsRemaining    (Step countdown calculation)
   [PASS] TestHOTP_PaddedOutput        (Leading-zero padding check)
+  [PASS] TestDecodeSecret_Sanitization(Spaces, hyphens, and tabs stripped)
+  [PASS] TestParseOTPAuthURI_CaseInsensitiveQuery (Case-insensitive query params)
 
 === CLI Subcommand & Integration Tests (Harness Invocations) ===
   [PASS] TestCLI_FullWorkflow         (init -> add -> list -> code -> export -> remove)
@@ -409,8 +413,9 @@ $ go test -v -cover .
   [PASS] TestCLI_ChangePasswordMismatch (Password mismatch handling)
   [PASS] TestCLI_RenameDuplicate      (Duplicate name prevention in rename)
   [PASS] TestCLI_ExportShowSecret     (Export with --show-secret)
+  [PASS] TestCLI_HOTPCounterProgression(Stateful counter incrementation)
 -------------------------------------------------------------------------------
-Result: 43 PASSED, 0 FAILED | Statement Coverage: 79.1%
+Result: 46 PASSED, 0 FAILED | Statement Coverage: 80.3%
 ```
 
 ---
@@ -473,8 +478,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `516585FA17978224886837994DBDC6D814A73D28CA78EF1B4133EEA93A954EE0` |
-| Clean Directory Build 2 | `516585FA17978224886837994DBDC6D814A73D28CA78EF1B4133EEA93A954EE0` |
+| Clean Directory Build 1 | `B31D44BF651D4C3A0C1C64984CDD0D8C9BDD10C49DC6CAB227C3220F124C3C3C` |
+| Clean Directory Build 2 | `B31D44BF651D4C3A0C1C64984CDD0D8C9BDD10C49DC6CAB227C3220F124C3C3C` |
 
 - **Toolchain**: `Go 1.27`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).
