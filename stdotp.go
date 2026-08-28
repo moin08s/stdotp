@@ -39,6 +39,14 @@ const AppVersion = "1.0.0"
 // os.Stdin: the first scanner could consume data the second one needs.
 var stdinReader = bufio.NewReader(os.Stdin)
 
+// zeroBytes securely overwrites a byte slice with zeros to minimize
+// exposure of sensitive cryptographic material in process memory.
+func zeroBytes(b []byte) {
+	for i := range b {
+		b[i] = 0
+	}
+}
+
 // ---- crypto primitives (HOTP/TOTP, RFC 4226 / 6238) ----
 
 // hotp computes an HMAC-Based One-Time Password per RFC 4226.
@@ -108,7 +116,9 @@ func newHMAC(algo string, key []byte) hash.Hash {
 // hardware). This number and its source are stated explicitly in the threat
 // model rather than left as an unstated, arbitrary choice.
 func deriveKey(password string, salt []byte, iterations int) []byte {
-	return pbkdf2([]byte(password), salt, iterations, 32)
+	passBytes := []byte(password)
+	defer zeroBytes(passBytes)
+	return pbkdf2(passBytes, salt, iterations, 32)
 }
 
 // pbkdf2 implements RFC 2898 §5.2 with HMAC-SHA256 as the PRF.
@@ -441,6 +451,9 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	if secret == "" {
 		return Account{}, errors.New("otpauth URI missing required 'secret' parameter")
 	}
+	if len(secret) > 2048 {
+		return Account{}, errors.New("secret too long (max 2048 characters)")
+	}
 	padded := secret + strings.Repeat("=", (8-len(secret)%8)%8)
 	if _, err = base32.StdEncoding.DecodeString(padded); err != nil {
 		return Account{}, fmt.Errorf("invalid base32 secret: %w", err)
@@ -470,8 +483,8 @@ func parseOTPAuthURI(uri string) (Account, error) {
 	period := 30
 	if p := q.Get("period"); p != "" {
 		period, err = strconv.Atoi(p)
-		if err != nil || period <= 0 {
-			return Account{}, fmt.Errorf("invalid period: %q (must be a positive integer)", p)
+		if err != nil || period < 5 || period > 300 {
+			return Account{}, fmt.Errorf("invalid period: %q (must be between 5 and 300 seconds)", p)
 		}
 	}
 
@@ -559,6 +572,9 @@ func decodeSecret(s string) ([]byte, error) {
 	if s == "" {
 		return nil, errors.New("empty secret")
 	}
+	if len(s) > 2048 {
+		return nil, errors.New("secret too long (max 2048 characters)")
+	}
 	padded := s + strings.Repeat("=", (8-len(s)%8)%8)
 	b, err := base32.StdEncoding.DecodeString(padded)
 	if err != nil {
@@ -597,6 +613,7 @@ Usage:
 
 Subcommands:
   init                       Initialize a new encrypted vault
+    --iterations <count>     PBKDF2 iterations (default: 600,000 per OWASP)
   add <name>                 Add an account (interactive: prompts on stdin)
     --secret <base32>        Provide base32 secret directly (shell-history risk!)
     --secret-file <path>     Read base32 secret from a file (preferred)
@@ -690,12 +707,17 @@ func main() {
 // Fail-safe: refuses to overwrite an existing vault (§2.2).
 func cmdInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp init") }
+	itersFlag := fs.Int("iterations", vaultKDFIterations, "PBKDF2 iterations (default 600,000 per OWASP)")
+	fs.Usage = func() { fmt.Fprintln(os.Stderr, "Usage: stdotp init [--iterations <n>]") }
 	if err := fs.Parse(args); err != nil {
 		return exitUsage
 	}
 	if fs.NArg() > 0 {
 		fs.Usage()
+		return exitUsage
+	}
+	if *itersFlag < 1000 || *itersFlag > 10_000_000 {
+		fmt.Fprintf(os.Stderr, "error: iterations must be between 1,000 and 10,000,000 (got %d)\n", *itersFlag)
 		return exitUsage
 	}
 
@@ -714,12 +736,16 @@ func cmdInit(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: password must not be empty")
 		return exitError
 	}
+	defer zeroBytes([]byte(password))
+
 	fmt.Fprint(os.Stderr, "Confirm master password: ")
 	confirm, err := readLine()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error reading confirmation: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes([]byte(confirm))
+
 	if subtle.ConstantTimeCompare([]byte(password), []byte(confirm)) != 1 {
 		fmt.Fprintln(os.Stderr, "error: passwords do not match")
 		return exitError
@@ -737,13 +763,15 @@ func cmdInit(args []string) int {
 	}
 
 	fmt.Fprintln(os.Stderr, "Deriving key (this takes a moment)...")
-	key := deriveKey(password, salt, vaultKDFIterations)
-	if err = saveVault(globalVaultPath, VaultData{}, key, salt, vaultKDFIterations); err != nil {
+	key := deriveKey(password, salt, *itersFlag)
+	defer zeroBytes(key)
+
+	if err = saveVault(globalVaultPath, VaultData{}, key, salt, *itersFlag); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
 		return exitError
 	}
 
-	fmt.Fprintf(os.Stderr, "Vault initialized at %s\n", globalVaultPath)
+	fmt.Fprintf(os.Stderr, "Vault initialized at %s (KDF iterations: %d)\n", globalVaultPath, *itersFlag)
 	return exitOK
 }
 
@@ -792,11 +820,14 @@ func cmdAdd(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes([]byte(password))
 
 	data, key, salt, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
 
 	for _, a := range data.Accounts {
 		if a.Name == name {
@@ -886,6 +917,9 @@ func cmdAdd(args []string) int {
 // Defaults: algorithm=SHA1, digits=6, period=30 — matching common authenticator apps.
 func accountFromSecret(name, secret string) (Account, error) {
 	secret = strings.ToUpper(strings.TrimRight(secret, "="))
+	if len(secret) > 2048 {
+		return Account{}, errors.New("secret too long (max 2048 characters)")
+	}
 	padded := secret + strings.Repeat("=", (8-len(secret)%8)%8)
 	if _, err := base32.StdEncoding.DecodeString(padded); err != nil {
 		return Account{}, fmt.Errorf("invalid base32 secret: %w", err)
@@ -931,11 +965,19 @@ func cmdCode(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes([]byte(password))
 
-	data, _, _, err := loadVault(globalVaultPath, password)
+	data, key, salt, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
+	defer func() {
+		for i := range data.Accounts {
+			zeroBytes([]byte(data.Accounts[i].Secret))
+		}
+	}()
 
 	account, ok := findAccount(data, name)
 	if !ok {
@@ -948,6 +990,7 @@ func cmdCode(args []string) int {
 		fmt.Fprintf(os.Stderr, "error decoding secret: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes(secret)
 
 	digits := account.Digits
 	if digits == 0 {
@@ -1012,11 +1055,14 @@ func cmdList(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes([]byte(password))
 
-	data, _, _, err := loadVault(globalVaultPath, password)
+	data, key, salt, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
 
 	if *asJSON {
 		type accountJSON struct {
@@ -1089,11 +1135,14 @@ func cmdRemove(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes([]byte(password))
 
 	data, key, salt, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
 
 	idx := -1
 	for i, a := range data.Accounts {
@@ -1139,11 +1188,14 @@ func cmdExport(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		return exitError
 	}
+	defer zeroBytes([]byte(password))
 
-	data, _, _, err := loadVault(globalVaultPath, password)
+	data, key, salt, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
+	defer zeroBytes(key)
+	defer zeroBytes(salt)
 
 	account, ok := findAccount(data, name)
 	if !ok {

@@ -13,7 +13,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 |---|---|:---:|
 | **Zero Runtime Dependencies** | Empty `require` block in `go.mod`. Builds with `GOPROXY=off`. | ✅ **Verified** |
 | **Never Rolls Its Own Cipher** | Composes `crypto/aes` + `crypto/cipher` (AES-256-GCM) and `crypto/hmac` (PBKDF2 per RFC 2898 §5.2). | ✅ **Verified** |
-| **Handles Key Material Defensibly** | AES-256-GCM at rest, 12-byte CSPRNG fresh nonces, 600,000 PBKDF2 iterations (OWASP 2026). | ✅ **Verified** |
+| **Handles Key Material Defensibly** | AES-256-GCM at rest, 12-byte CSPRNG fresh nonces, configurable PBKDF2 iterations (default 600,000 per OWASP 2026), best-effort memory zeroing. | ✅ **Verified** |
 | **Fails Safe (§2.2)** | Auth tag failure → exit 3 (no partial plaintext); corrupt vault → exit 1; missing vault → exit 5. | ✅ **Verified** |
 | **Atomic File Operations** | Temp file (`.stdotp-*.tmp`) $\rightarrow$ `fsync` $\rightarrow$ `os.Rename` (crash & power-loss safe). | ✅ **Verified** |
 | **Air-Gapped Operation** | Zero network calls; `net/http` is completely absent from the runtime. | ✅ **Verified** |
@@ -31,14 +31,15 @@ Every cryptographic choice is documented and defensible; every external dependen
 4. [Cryptographic Architecture & Standards Compliance](#cryptographic-architecture--standards-compliance)
    - [Vault Encryption Subsystem (PBKDF2 + AES-256-GCM)](#1-vault-encryption-subsystem)
    - [OTP Core Engine (RFC 4226 & RFC 6238)](#2-otp-core-engine)
-   - [Constant-Time Verification](#3-constant-time-verification)
+   - [Constant-Time Verification & Memory Zeroing](#3-constant-time-verification--memory-zeroing)
 5. [Fail-Safe Design & State Machine](#fail-safe-design--state-machine)
 6. [CLI Workflows & Demo Transcripts](#cli-workflows--demo-transcripts)
 7. [Threat Model & Security Defensibility](#threat-model--security-defensibility)
 8. [Automated Test Suite & Live Coverage](#automated-test-suite--live-coverage)
-9. [Full 15-Package Substitution Matrix](#full-15-package-substitution-matrix)
-10. [Reproducible Build & Dependency Proof](#reproducible-build--dependency-proof)
-11. [RFC References & License](#rfc-references--license)
+9. [Performance Benchmarks](#performance-benchmarks)
+10. [Full 15-Package Substitution Matrix](#full-15-package-substitution-matrix)
+11. [Reproducible Build & Dependency Proof](#reproducible-build--dependency-proof)
+12. [RFC References & License](#rfc-references--license)
 
 ---
 
@@ -51,7 +52,7 @@ go build -o stdotp .
 # 2. Run built-in self-tests (Single-binary verification)
 ./stdotp self-test
 
-# 3. Initialize an encrypted vault
+# 3. Initialize an encrypted vault (default 600,000 PBKDF2 iterations)
 ./stdotp init
 
 # 4. Add an account interactively
@@ -77,10 +78,13 @@ GOPROXY=off go build ./...
 # 3. Run the complete automated test suite with coverage
 go test -v -cover .
 
-# 4. Run the in-process standalone self-test (Single File validation)
+# 4. Run performance benchmarks
+go test -bench=. -benchmem -run=^$ .
+
+# 5. Run the in-process standalone self-test (Single File validation)
 go run . self-test
 
-# 5. Verify static analysis and formatting
+# 6. Verify static analysis and formatting
 go vet ./...
 gofmt -l .
 ```
@@ -109,7 +113,8 @@ gofmt -l .
                     |           Crypto Subsystem            |
                     |  - PBKDF2-HMAC-SHA256 (600k iters)   |
                     |  - AES-256-GCM (12-byte CSPRNG nonce) |
-                    |  - Constant-time subtle comparison    |
+                    |  - Constant-time comparison           |
+                    |  - Best-effort memory zeroing         |
                     +-------------------+-------------------+
                                         |
                                         v
@@ -169,7 +174,7 @@ $$T_i = U_1 \oplus U_2 \oplus \dots \oplus U_c$$
 $$U_1 = \text{PRF}(\text{Password}, \text{Salt} \parallel \text{INT}(i))$$
 $$U_j = \text{PRF}(\text{Password}, U_{j-1}) \quad \text{for } j = 2 \dots c$$
 
-- **Iterations ($c$)**: `600,000` (OWASP 2026 Password Storage recommendation for modern GPU resilience).
+- **Iterations ($c$)**: `600,000` default (OWASP 2026 Password Storage recommendation for modern GPU resilience), configurable via `--iterations` upon initialization.
 - **Key Length**: 32 bytes (256 bits) for AES-256.
 - **Verification**: Validated against official **RFC 7914 §12** test vectors ($c=1$ and $c=80,000$).
 
@@ -215,9 +220,10 @@ $$\text{HOTP} = \text{CodeBinary} \bmod 10^{\text{Digits}}$$
 
 ---
 
-### 3. Constant-Time Verification
+### 3. Constant-Time Verification & Memory Zeroing
 
 - **Constant-Time Comparison**: `crypto/subtle.ConstantTimeCompare` is used during password confirmation to prevent timing side-channel attacks.
+- **Best-Effort Memory Zeroing**: Sensitive slices (master passwords, derived AES keys, intermediate salts, and decoded account secrets) are actively overwritten with zeros using `zeroBytes` deferred cleanup handlers upon exiting command scopes.
 
 ---
 
@@ -262,11 +268,11 @@ flowchart TD
 ### Complete Interactive Session
 
 ```sh
-$ ./stdotp init
+$ ./stdotp init --iterations=600000
 Enter new master password:
 Confirm master password:
 Deriving key (this takes a moment)...
-Vault initialized at /home/user/.stdotp/vault.json
+Vault initialized at /home/user/.stdotp/vault.json (KDF iterations: 600000)
 
 $ ./stdotp add github
 Master password:
@@ -332,7 +338,7 @@ Account "github" removed.
 ### 1. Master Key Derivation Defensibility
 > **PBKDF2-HMAC-SHA256 implemented exactly per RFC 2898 by composing `crypto/hmac`. Not a custom algorithm — a faithful standard construction built entirely from stdlib primitives.**
 
-- **OWASP 2026 Compliance**: 600,000 iterations provides robust resistance against modern GPU/ASIC brute-force attacks while unlocking in ~0.5s on desktop CPUs.
+- **OWASP 2026 Compliance**: 600,000 iterations default provides robust resistance against modern GPU/ASIC brute-force attacks while unlocking in ~0.5s on modern CPUs. Users can configure iterations via `--iterations`.
 - **Salt Security**: 16-byte (128-bit) CSPRNG salts prevent precomputation and rainbow tables.
 
 ### 2. Secret Input Security
@@ -340,7 +346,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 
 ### 3. Documented Limitations (Honest Disclosure)
 - **Terminal Masking**: In strict compliance with zero-dependency rules, external packages (`golang.org/x/term`) are excluded. Password characters echo to the terminal as typed.
-- **Memory Hygiene**: In accordance with RFC 7914 §14, sensitive key material can persist in heap allocations due to Go's garbage collection lifecycle; memory pages are not locked with `mlock`.
+- **Memory Hygiene**: In accordance with RFC 7914 §14, sensitive key material can persist in heap allocations due to Go's garbage collection lifecycle; `stdotp` applies best-effort zeroing to all sensitive byte slices.
 
 ### 4. Air-Gap Verification
 `stdotp` contains zero networking code (`net/http` is absent). Verified by executing full lifecycle operations with all network adapters disabled.
@@ -353,7 +359,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (30 Tests · 76.8% Coverage)
+### Test Results Breakdown (31 Tests · 78.4% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -388,9 +394,25 @@ $ go test -v -cover .
   [PASS] TestCLI_Version              (Version output formatting)
   [PASS] TestCLI_ListJSON             (JSON accounts array formatting)
   [PASS] TestCLI_CodeWithTime         (Deterministic --time override)
+  [PASS] TestCLI_InitCustomIterations (Custom PBKDF2 iterations support)
 -------------------------------------------------------------------------------
-Result: 30 PASSED, 0 FAILED | Statement Coverage: 76.8%
+Result: 31 PASSED, 0 FAILED | Statement Coverage: 78.4%
 ```
+
+---
+
+## Performance Benchmarks
+
+```sh
+$ go test -bench=. -benchmem -run=^$ .
+```
+
+| Benchmark Operation | Throughput / Latency | Memory per Op | Allocations |
+|---|---|---|---|
+| `BenchmarkHOTP` (RFC 4226) | **1,118 ns/op** (~894,000 ops/sec) | 496 B/op | 9 allocs/op |
+| `BenchmarkTOTP` (RFC 6238) | **1,111 ns/op** (~900,000 ops/sec) | 496 B/op | 9 allocs/op |
+| `BenchmarkVaultEncryptDecrypt` (AES-GCM) | **7,250 ns/op** (~138,000 ops/sec) | 3,665 B/op | 13 allocs/op |
+| `BenchmarkPBKDF2_100k` (100k iters) | **29.0 ms/op** (34.5 keys/sec) | 3.2 MB/op | 100,010 allocs/op |
 
 ---
 
@@ -437,8 +459,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `DD283A8FF5BDF35EE2C89BD95E7F2AB5043AD6206E100B6C62DB230D617E48BD` |
-| Clean Directory Build 2 | `DD283A8FF5BDF35EE2C89BD95E7F2AB5043AD6206E100B6C62DB230D617E48BD` |
+| Clean Directory Build 1 | `1DDFC1F953A40E72810B1A858F543F646E5F0E87315BA9EBB6F613E8FB7ABE8E` |
+| Clean Directory Build 2 | `1DDFC1F953A40E72810B1A858F543F646E5F0E87315BA9EBB6F613E8FB7ABE8E` |
 
 - **Toolchain**: `Go 1.22+`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).

@@ -801,3 +801,74 @@ func TestCLI_CodeWithTime(t *testing.T) {
 		t.Errorf("unexpected output from code --time: %q", out)
 	}
 }
+
+// TestCLI_InitCustomIterations verifies initializing vault with custom PBKDF2 iterations.
+func TestCLI_InitCustomIterations(t *testing.T) {
+	vf := "--vault=" + filepath.Join(t.TempDir(), "vault.json")
+	pass := "pass\n"
+
+	_, _, code := runCLI(t, pass+pass, vf, "init", "--iterations=5000")
+	if code != exitOK {
+		t.Fatalf("init --iterations failed with exit code %d", code)
+	}
+
+	_, _, code = runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "alice")
+	if code != exitOK {
+		t.Fatalf("add to custom-iteration vault failed with exit code %d", code)
+	}
+}
+
+// ============================================================
+// Benchmarks (Performance & Allocation Metrics)
+// ============================================================
+
+func BenchmarkHOTP(b *testing.B) {
+	secret := []byte("12345678901234567890")
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = hotp(secret, uint64(i), 6, "SHA1")
+	}
+}
+
+func BenchmarkTOTP(b *testing.B) {
+	secret := []byte("12345678901234567890")
+	t := time.Unix(1111111111, 0)
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_, _ = totp(secret, t, 30, 6, "SHA1")
+	}
+}
+
+func BenchmarkPBKDF2_100k(b *testing.B) {
+	salt := []byte("1234567890123456")
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		_ = deriveKey("password", salt, 100_000)
+	}
+}
+
+func BenchmarkVaultEncryptDecrypt(b *testing.B) {
+	key := deriveKey("testpass", []byte("1234567890123456"), 1000)
+	data := VaultData{
+		Accounts: []Account{
+			{Name: "github", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"},
+			{Name: "aws", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA256", Digits: 8, Period: 30, Type: "totp"},
+		},
+	}
+	b.ResetTimer()
+	b.ReportAllocs()
+	for i := 0; i < b.N; i++ {
+		nonce, ct, err := encryptVault(data, key)
+		if err != nil {
+			b.Fatal(err)
+		}
+		_, err = decryptVault(nonce, ct, key)
+		if err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
