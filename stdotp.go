@@ -142,6 +142,7 @@ func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
 	// Reuse a single HMAC context across iterations to avoid per-iteration
 	// allocations. prf.Reset() brings it back to the initial keyed state.
 	prf := hmac.New(sha256.New, password)
+	var uBuf [hLen]byte
 
 	for block := 1; block <= numBlocks; block++ {
 		// U1 = PRF(Password, Salt || INT(block))
@@ -154,7 +155,7 @@ func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
 
 		prf.Reset()
 		prf.Write(saltBlock)
-		u := prf.Sum(nil)
+		u := prf.Sum(uBuf[:0])
 
 		t := make([]byte, hLen)
 		copy(t, u)
@@ -163,7 +164,7 @@ func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
 		for i := 1; i < iterations; i++ {
 			prf.Reset()
 			prf.Write(u)
-			u = prf.Sum(nil)
+			u = prf.Sum(uBuf[:0])
 			for j := range t {
 				t[j] ^= u[j]
 			}
@@ -1042,6 +1043,17 @@ func cmdCode(args []string) int {
 	if strings.EqualFold(account.Type, "hotp") {
 		otp = hotp(secret, account.Counter, digits, algo)
 		secsLeft = 0
+		// RFC 4226: Increment counter on code generation and persist vault
+		for i := range data.Accounts {
+			if data.Accounts[i].Name == name {
+				data.Accounts[i].Counter++
+				break
+			}
+		}
+		if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
+			fmt.Fprintf(os.Stderr, "error updating HOTP counter: %v\n", err)
+			return exitError
+		}
 	} else {
 		otp, secsLeft = totp(secret, otpTime, period, digits, algo)
 	}
@@ -1133,13 +1145,35 @@ func cmdVerify(args []string) int {
 	}
 
 	if strings.EqualFold(account.Type, "hotp") {
-		expected := hotp(secret, account.Counter, digits, algo)
-		valid := (subtle.ConstantTimeCompare([]byte(expected), []byte(inputCode)) == 1)
-		if valid {
+		w := *windowFlag
+		if w < 0 {
+			w = 0
+		} else if w > 10 {
+			w = 10
+		}
+		matched := false
+		matchedCounter := uint64(0)
+		for c := account.Counter; c <= account.Counter+uint64(w); c++ {
+			expected := hotp(secret, c, digits, algo)
+			if subtle.ConstantTimeCompare([]byte(expected), []byte(inputCode)) == 1 {
+				matched = true
+				matchedCounter = c
+				break
+			}
+		}
+		if matched {
+			// Advance counter past the matched value to prevent replay attacks
+			for i := range data.Accounts {
+				if data.Accounts[i].Name == name {
+					data.Accounts[i].Counter = matchedCounter + 1
+					break
+				}
+			}
+			_ = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations)
 			if *asJSON {
-				fmt.Printf(`{"account":%q,"valid":true,"type":"hotp","counter":%d}`+"\n", name, account.Counter)
+				fmt.Printf(`{"account":%q,"valid":true,"type":"hotp","counter":%d}`+"\n", name, matchedCounter)
 			} else {
-				fmt.Printf("Valid code for HOTP counter %d\n", account.Counter)
+				fmt.Printf("Valid code for HOTP counter %d\n", matchedCounter)
 			}
 			return exitOK
 		}

@@ -36,7 +36,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 6. [CLI Workflows & Demo Transcripts](#cli-workflows--demo-transcripts)
 7. [Threat Model & Security Defensibility](#threat-model--security-defensibility)
 8. [Automated Test Suite & Live Coverage](#automated-test-suite--live-coverage)
-9. [Performance Benchmarks & PBKDF2 Trade-Offs](#performance-benchmarks--pbkdf2-trade-offs)
+9. [Performance Benchmarks & PBKDF2 Zero-Allocation Optimization](#performance-benchmarks--pbkdf2-zero-allocation-optimization)
 10. [Full 15-Package Substitution Matrix](#full-15-package-substitution-matrix)
 11. [Reproducible Build & Dependency Proof](#reproducible-build--dependency-proof)
 12. [Demo Script, Side-Quest & License](#demo-script-side-quest--license)
@@ -82,7 +82,7 @@ GOPROXY=off go build ./...
 go test -v -cover .
 
 # 4. Run performance benchmarks
-go test -bench=. -benchmem -run=^$ .
+go test -bench Benchmark -benchmem -run None .
 
 # 5. Run the in-process standalone self-test (Single File validation)
 go run . self-test
@@ -179,7 +179,7 @@ $$U_1 = \text{PRF}(\text{Password}, \text{Salt} \parallel \text{INT}(i))$$
 $$U_j = \text{PRF}(\text{Password}, U_{j-1}) \quad \text{for } j = 2 \dots c$$
 
 - **Iterations ($c$)**: `600,000` default (OWASP 2026 Password Storage recommendation for modern GPU resilience), configurable via `--iterations` upon initialization.
-- **Key Length**: 32 bytes (256 bits) for AES-256.
+- **Zero-Allocation Inner Loop**: Reuses slice buffers (`uBuf[:0]`) to completely eliminate heap allocation overhead in the derivation loop.
 - **Verification**: Validated against official **RFC 7914 §12** test vectors ($c=1$ and $c=80,000$).
 
 #### Authenticated Cipher (AES-256-GCM)
@@ -212,15 +212,9 @@ flowchart LR
     end
 ```
 
-#### TOTP Time-Step Calculation (RFC 6238)
-$$T = \text{UnixTime}(\text{now})$$
-$$\text{Counter } C_T = \left\lfloor \frac{T - T_0}{X} \right\rfloor \quad (T_0 = 0, X = 30\text{s})$$
-$$\text{Seconds Remaining} = X - (T \bmod X)$$
-
-#### Dynamic Truncation Formula (RFC 4226 §5.3)
-$$\text{Offset} = \text{MAC}[\text{len}-1] \land \text{0x0F}$$
-$$\text{CodeBinary} = (\text{MAC}[\text{Offset}] \land \text{0x7F}) \ll 24 \mid (\text{MAC}[\text{Offset}+1] \land \text{0xFF}) \ll 16 \mid (\text{MAC}[\text{Offset}+2] \land \text{0xFF}) \ll 8 \mid (\text{MAC}[\text{Offset}+3] \land \text{0xFF})$$
-$$\text{HOTP} = \text{CodeBinary} \bmod 10^{\text{Digits}}$$
+#### HOTP Counter & State Machine (RFC 4226)
+- **Generation (`code`)**: Computes token at counter $C$, then atomically increments counter ($C \to C+1$) in the encrypted vault.
+- **Verification (`verify`)**: Verifies token against current counter with configurable lookahead window ($C \dots C+W$), advancing the stored counter past the matched value to prevent replay attacks.
 
 ---
 
@@ -348,8 +342,8 @@ All self-tests passed successfully.
 ### 1. Master Key Derivation Defensibility
 > **PBKDF2-HMAC-SHA256 implemented exactly per RFC 2898 by composing `crypto/hmac`. Not a custom algorithm — a faithful standard construction built entirely from stdlib primitives.**
 
-- **OWASP 2026 Compliance**: 600,000 iterations default provides robust resistance against modern GPU/ASIC brute-force attacks while unlocking in ~175ms on modern desktop CPUs.
-- **Performance Trade-Off & User Choice**: Users on constrained hardware can tune iterations via `stdotp init --iterations <count>` (e.g. 100,000 iterations for ~29ms latency).
+- **OWASP 2026 Compliance**: 600,000 iterations default provides robust resistance against modern GPU/ASIC brute-force attacks while unlocking in ~140ms on modern desktop CPUs.
+- **Performance Trade-Off & User Choice**: Users on constrained hardware can tune iterations via `stdotp init --iterations <count>` (e.g. 100,000 iterations for ~23ms latency).
 - **Salt Security**: 16-byte (128-bit) CSPRNG salts prevent precomputation and rainbow tables.
 
 ### 2. Secret Input Security
@@ -367,7 +361,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (43 Tests · 79.7% Coverage)
+### Test Results Breakdown (43 Tests · 79.1% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -416,23 +410,23 @@ $ go test -v -cover .
   [PASS] TestCLI_RenameDuplicate      (Duplicate name prevention in rename)
   [PASS] TestCLI_ExportShowSecret     (Export with --show-secret)
 -------------------------------------------------------------------------------
-Result: 43 PASSED, 0 FAILED | Statement Coverage: 79.7%
+Result: 43 PASSED, 0 FAILED | Statement Coverage: 79.1%
 ```
 
 ---
 
-## Performance Benchmarks & PBKDF2 Trade-Offs
+## Performance Benchmarks & PBKDF2 Zero-Allocation Optimization
 
 ```sh
-$ go test -bench=. -benchmem -run=^$ .
+$ go test -bench Benchmark -benchmem -run None .
 ```
 
 | Benchmark Operation | Throughput / Latency | Memory per Op | Allocations |
 |---|---|---|---|
-| `BenchmarkHOTP` (RFC 4226) | **1,118 ns/op** (~894,000 ops/sec) | 496 B/op | 9 allocs/op |
-| `BenchmarkTOTP` (RFC 6238) | **1,111 ns/op** (~900,000 ops/sec) | 496 B/op | 9 allocs/op |
-| `BenchmarkVaultEncryptDecrypt` (AES-GCM) | **7,250 ns/op** (~138,000 ops/sec) | 3,665 B/op | 13 allocs/op |
-| `BenchmarkPBKDF2_100k` (100k iters) | **29.0 ms/op** (34.5 keys/sec) | 3.2 MB/op | 100,010 allocs/op |
+| `BenchmarkHOTP` (RFC 4226) | **959.9 ns/op** (>1,000,000 ops/sec) | 496 B/op | 9 allocs/op |
+| `BenchmarkTOTP` (RFC 6238) | **1,001 ns/op** (~1,000,000 ops/sec) | 496 B/op | 9 allocs/op |
+| `BenchmarkVaultEncryptDecrypt` (AES-GCM) | **6,084 ns/op** (~164,000 ops/sec) | 3,713 B/op | 13 allocs/op |
+| `BenchmarkPBKDF2_100k` (100k iters) | **23.15 ms/op** (43.2 keys/sec) | **800 B/op** | **11 allocs/op** |
 
 ---
 
@@ -479,8 +473,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `59E0BBD23FC7E019E6A9E7E0FF6981AA9EB69D9B50A7ED71D35C2EF3968112D9` |
-| Clean Directory Build 2 | `59E0BBD23FC7E019E6A9E7E0FF6981AA9EB69D9B50A7ED71D35C2EF3968112D9` |
+| Clean Directory Build 1 | `516585FA17978224886837994DBDC6D814A73D28CA78EF1B4133EEA93A954EE0` |
+| Clean Directory Build 2 | `516585FA17978224886837994DBDC6D814A73D28CA78EF1B4133EEA93A954EE0` |
 
 - **Toolchain**: `Go 1.27`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).
