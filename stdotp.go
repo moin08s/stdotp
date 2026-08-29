@@ -54,6 +54,15 @@ func zeroBytes(b []byte) {
 	}
 }
 
+// stripBOM removes the UTF-8 byte order mark (U+FEFF = 0xEF 0xBB 0xBF) from
+// the start of s, if present. Windows tools (Notepad "UTF-8", PowerShell
+// Out-File -Encoding UTF8, many editors) silently prepend this 3-byte
+// sequence; without stripping it, URI and Base32 parsing fail with cryptic
+// errors like "first path segment in URL cannot contain colon".
+func stripBOM(s string) string {
+	return strings.TrimPrefix(s, "\xef\xbb\xbf")
+}
+
 // ---- crypto primitives (HOTP/TOTP, RFC 4226 / 6238) ----
 
 // hotp computes an HMAC-Based One-Time Password per RFC 4226.
@@ -90,10 +99,17 @@ func hotp(secret []byte, counter uint64, digits int, algo string) string {
 //
 // Returns the OTP code and the number of seconds left in the current period.
 // The counter is floor(unix(t) / period) — identical to RFC 6238 §4.
+//
+// Note on negative timestamps: Go's % operator preserves the dividend's sign,
+// so for t before the Unix epoch elapsed is negative. We normalise elapsed into
+// [0, period) to ensure secondsRemaining is always in [1, period].
 func totp(secret []byte, t time.Time, period, digits int, algo string) (code string, secondsRemaining int) {
 	ts := t.Unix()
 	counter := uint64(ts / int64(period))
 	elapsed := int(ts % int64(period))
+	if elapsed < 0 {
+		elapsed += period // normalise to [0, period) for pre-epoch timestamps
+	}
 	secondsRemaining = period - elapsed
 	code = hotp(secret, counter, digits, algo)
 	return
@@ -923,6 +939,20 @@ func cmdAdd(args []string) int {
 		fs.Usage()
 		return exitUsage
 	}
+	if strings.TrimSpace(name) == "" {
+		fmt.Fprintln(os.Stderr, "error: account name must not be blank or all whitespace")
+		return exitUsage
+	}
+	if len(name) > 255 {
+		fmt.Fprintln(os.Stderr, "error: account name too long (max 255 bytes)")
+		return exitUsage
+	}
+	for _, r := range name {
+		if r < 0x20 || r == 0x7f {
+			fmt.Fprintf(os.Stderr, "error: account name contains invalid control character U+%04X\n", r)
+			return exitUsage
+		}
+	}
 	if err := fs.Parse(flagArgs); err != nil {
 		return exitUsage
 	}
@@ -973,7 +1003,8 @@ func cmdAdd(args []string) int {
 			fmt.Fprintf(os.Stderr, "error reading URI file: %v\n", readErr)
 			return exitError
 		}
-		account, err = parseOTPAuthURI(strings.TrimSpace(string(raw)))
+		// stripBOM handles Windows UTF-8 BOM (Notepad, PowerShell Out-File, etc.)
+		account, err = parseOTPAuthURI(stripBOM(strings.TrimSpace(string(raw))))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error parsing URI from file: %v\n", err)
 			return exitError
@@ -993,7 +1024,8 @@ func cmdAdd(args []string) int {
 			fmt.Fprintf(os.Stderr, "error reading secret file: %v\n", readErr)
 			return exitError
 		}
-		account, err = accountFromSecret(name, strings.TrimSpace(string(raw)))
+		// stripBOM handles Windows UTF-8 BOM (Notepad, PowerShell Out-File, etc.)
+		account, err = accountFromSecret(name, stripBOM(strings.TrimSpace(string(raw))))
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			return exitError

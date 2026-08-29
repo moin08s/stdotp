@@ -1457,3 +1457,136 @@ func TestVault_ConcurrentHOTPAccess(t *testing.T) {
 		}
 	}
 }
+
+// TestStripBOM verifies that stripBOM removes the UTF-8 BOM (0xEF 0xBB 0xBF)
+// from the beginning of a string, and is a no-op for BOM-free strings.
+func TestStripBOM(t *testing.T) {
+	cases := []struct {
+		desc string
+		in   string
+		want string
+	}{
+		{"no BOM", "otpauth://totp/Test", "otpauth://totp/Test"},
+		{"UTF-8 BOM", "\xef\xbb\xbfotpauth://totp/Test", "otpauth://totp/Test"},
+		{"BOM only", "\xef\xbb\xbf", ""},
+		{"empty string", "", ""},
+		{"BOM mid-string (not stripped)", "abc\xef\xbb\xbfdef", "abc\xef\xbb\xbfdef"},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			got := stripBOM(c.in)
+			if got != c.want {
+				t.Errorf("stripBOM(%q) = %q; want %q", c.in, got, c.want)
+			}
+		})
+	}
+}
+
+// TestCLI_URIFile_WithBOM tests that --uri-file succeeds even when the file
+// contains a Windows UTF-8 BOM (0xEF 0xBB 0xBF prefix).
+func TestCLI_URIFile_WithBOM(t *testing.T) {
+	dir := t.TempDir()
+	vf := "--vault=" + filepath.Join(dir, "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init", "--iterations=1000")
+
+	// Write a URI file with a BOM prefix (as Notepad/PowerShell do)
+	uriPath := filepath.Join(dir, "uri.txt")
+	bom := "\xef\xbb\xbf"
+	uri := bom + "otpauth://totp/BOMTest?secret=JBSWY3DPEHPK3PXP&issuer=Test"
+	if err := os.WriteFile(uriPath, []byte(uri), 0600); err != nil {
+		t.Fatalf("write BOM uri file: %v", err)
+	}
+
+	_, stderr, code := runCLI(t, pass, vf, "add", "bomacct", "--uri-file", uriPath)
+	if code != exitOK {
+		t.Fatalf("expected exit 0 for BOM URI file, got %d; stderr: %s", code, stderr)
+	}
+
+	// Verify the account was added correctly
+	out, _, code2 := runCLI(t, pass, vf, "list", "--json")
+	if code2 != exitOK {
+		t.Fatalf("list: exit %d", code2)
+	}
+	if !strings.Contains(out, "bomacct") {
+		t.Errorf("expected account 'bomacct' in list, got: %s", out)
+	}
+}
+
+// TestCLI_SecretFile_WithBOM tests that --secret-file succeeds even when the
+// file contains a Windows UTF-8 BOM.
+func TestCLI_SecretFile_WithBOM(t *testing.T) {
+	dir := t.TempDir()
+	vf := "--vault=" + filepath.Join(dir, "vault.json")
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init", "--iterations=1000")
+
+	secretPath := filepath.Join(dir, "secret.txt")
+	bom := "\xef\xbb\xbf"
+	if err := os.WriteFile(secretPath, []byte(bom+"JBSWY3DPEHPK3PXP"), 0600); err != nil {
+		t.Fatalf("write BOM secret file: %v", err)
+	}
+
+	_, stderr, code := runCLI(t, pass, vf, "add", "bomsecret", "--secret-file", secretPath)
+	if code != exitOK {
+		t.Fatalf("expected exit 0 for BOM secret file, got %d; stderr: %s", code, stderr)
+	}
+}
+
+// TestTOTP_NegativeTimestamp verifies that totp() returns a secondsRemaining
+// in [1, period] even for Unix timestamps before the epoch (negative values).
+// Go's % operator preserves the sign of the dividend, which previously
+// caused secondsRemaining to be period+1 for timestamps like T=-1.
+func TestTOTP_NegativeTimestamp(t *testing.T) {
+	secret := []byte("secret-bytes-here")
+	period := 30
+
+	cases := []struct {
+		ts   int64
+		desc string
+	}{
+		{-1, "T=-1"},
+		{-30, "T=-30 (exactly one period before epoch)"},
+		{-29, "T=-29"},
+		{-31, "T=-31"},
+	}
+	for _, c := range cases {
+		t.Run(c.desc, func(t *testing.T) {
+			tm := time.Unix(c.ts, 0)
+			_, remaining := totp(secret, tm, period, 6, "SHA1")
+			if remaining < 1 || remaining > period {
+				t.Errorf("T=%d: secondsRemaining=%d; want in [1,%d]", c.ts, remaining, period)
+			}
+		})
+	}
+}
+
+// TestCLI_AccountName_Validation verifies that invalid account names are
+// rejected before acquiring the vault lock or prompting for a password.
+func TestCLI_AccountName_Validation(t *testing.T) {
+	dir := t.TempDir()
+	vf := "--vault=" + filepath.Join(dir, "vault.json")
+	pass := "pass\n"
+	runCLI(t, pass+pass, vf, "init", "--iterations=1000")
+
+	// Control character in name (newline embedded via the name argument itself)
+	_, stderr, code := runCLI(t, "", vf, "add", "bad\x01name", "--secret=JBSWY3DPEHPK3PXP")
+	if code != exitUsage {
+		t.Errorf("control-char name: expected exit %d (usage), got %d; stderr: %s", exitUsage, code, stderr)
+	}
+
+	// All-whitespace name
+	_, stderr, code = runCLI(t, "", vf, "add", "   ", "--secret=JBSWY3DPEHPK3PXP")
+	if code != exitUsage {
+		t.Errorf("whitespace-only name: expected exit %d (usage), got %d; stderr: %s", exitUsage, code, stderr)
+	}
+
+	// Name > 255 bytes
+	longName := strings.Repeat("a", 256)
+	_, stderr, code = runCLI(t, "", vf, "add", longName, "--secret=JBSWY3DPEHPK3PXP")
+	if code != exitUsage {
+		t.Errorf("long name: expected exit %d (usage), got %d; stderr: %s", exitUsage, code, stderr)
+	}
+}
