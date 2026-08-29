@@ -231,38 +231,92 @@ func vaultAAD(formatVersion int, kdf string, iterations int, saltBase64 string) 
 	return []byte(fmt.Sprintf("stdotp:v%d:%s:%d:%s", formatVersion, kdf, iterations, saltBase64))
 }
 
-// acquireVaultLock acquires an exclusive lock file (<vaultPath>.lock)
-// to prevent race conditions and vault corruption during concurrent operations.
+// acquireVaultLock acquires an exclusive lock file (<vaultPath>.lock).
+//
+// Design contract: all password prompts MUST be completed BEFORE calling this
+// function. The lock is held only during the brief read→modify→write file
+// operation (typically < 1 second). This prevents false-positive stale
+// detection and eliminates the interactive-input time-window race.
+//
+// The unlock function verifies PID ownership before deleting the lock file,
+// so a peer process that re-acquires after a stale-detection sweep cannot
+// have its lock deleted by our deferred unlock.
 func acquireVaultLock(vaultPath string) (unlock func(), err error) {
 	lockPath := vaultPath + ".lock"
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
 		return nil, fmt.Errorf("create lock dir: %w", err)
 	}
 
+	myPID := os.Getpid()
 	start := time.Now()
+
 	for {
 		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
 		if err == nil {
-			// Lock acquired! Write PID and timestamp
-			fmt.Fprintf(f, "pid=%d time=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
+			// Lock acquired — record our PID so the unlock func can verify ownership.
+			fmt.Fprintf(f, "pid=%d\n", myPID)
 			f.Close()
+
 			return func() {
-				_ = os.Remove(lockPath)
+				// Confirm we still own the lock before removing it.
+				// This guards against the race where our lock expired and was
+				// re-acquired by another process before our deferred unlock runs.
+				raw, readErr := os.ReadFile(lockPath)
+				if readErr != nil {
+					return
+				}
+				var storedPID int
+				fmt.Sscanf(strings.TrimSpace(string(raw)), "pid=%d", &storedPID)
+				if storedPID == myPID {
+					_ = os.Remove(lockPath)
+				}
 			}, nil
 		}
 
-		// Check for stale lock (older than 10 seconds)
-		if info, statErr := os.Stat(lockPath); statErr == nil {
-			if time.Since(info.ModTime()) > 10*time.Second {
-				_ = os.Remove(lockPath) // remove stale lock from crashed/killed process
-				continue
-			}
+		// Only remove a stale lock when the owner process is confirmed dead.
+		if lockOwnerIsDead(lockPath) {
+			_ = os.Remove(lockPath)
+			continue
 		}
 
 		if time.Since(start) > 3*time.Second {
 			return nil, errors.New("vault is locked by another process (timeout waiting for lock)")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// lockOwnerIsDead reports whether the process that created lockPath has exited.
+//
+// It reads the PID written into the lock file by acquireVaultLock.
+// On Linux, /proc/<pid> existence is checked (authoritative).
+// On other platforms a 60-second file-age threshold is used as a conservative
+// fallback. Because prompts are completed before lock acquisition, legitimate
+// locks are held for < 1 second, so 60 seconds is an extremely safe margin.
+func lockOwnerIsDead(lockPath string) bool {
+	raw, err := os.ReadFile(lockPath)
+	if err != nil {
+		return false // unreadable → assume alive (conservative)
+	}
+	var pid int
+	fmt.Sscanf(strings.TrimSpace(string(raw)), "pid=%d", &pid)
+	if pid <= 0 || pid == os.Getpid() {
+		return false
+	}
+
+	switch runtime.GOOS {
+	case "linux":
+		// /proc/<pid> exists exactly while the process is alive on Linux.
+		_, statErr := os.Stat(fmt.Sprintf("/proc/%d", pid))
+		return os.IsNotExist(statErr)
+	default:
+		// Conservative time-based fallback for non-Linux platforms.
+		// Legitimate locks (held only during file I/O) expire in < 1 second.
+		info, statErr := os.Stat(lockPath)
+		if statErr != nil {
+			return false
+		}
+		return time.Since(info.ModTime()) > 60*time.Second
 	}
 }
 
@@ -781,18 +835,8 @@ func cmdInit(args []string) int {
 		return exitUsage
 	}
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
-	if _, err := os.Stat(globalVaultPath); err == nil {
-		fmt.Fprintf(os.Stderr, "error: vault already exists at %s\n", globalVaultPath)
-		return exitError
-	}
-
+	// Collect password before acquiring the lock so the lock is held
+	// only during the brief file-write operation, not during user input.
 	fmt.Fprint(os.Stderr, "Enter new master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -815,6 +859,18 @@ func cmdInit(args []string) int {
 
 	if subtle.ConstantTimeCompare([]byte(password), []byte(confirm)) != 1 {
 		fmt.Fprintln(os.Stderr, "error: passwords do not match")
+		return exitError
+	}
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
+	if _, err := os.Stat(globalVaultPath); err == nil {
+		fmt.Fprintf(os.Stderr, "error: vault already exists at %s\n", globalVaultPath)
 		return exitError
 	}
 
@@ -871,13 +927,7 @@ func cmdAdd(args []string) int {
 		return exitUsage
 	}
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
+	// Collect password before acquiring the lock.
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -885,6 +935,13 @@ func cmdAdd(args []string) int {
 		return exitError
 	}
 	defer zeroBytes([]byte(password))
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
@@ -1026,13 +1083,7 @@ func cmdCode(args []string) int {
 		return exitUsage
 	}
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
+	// Collect password before acquiring the lock.
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1040,6 +1091,13 @@ func cmdCode(args []string) int {
 		return exitError
 	}
 	defer zeroBytes([]byte(password))
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
@@ -1151,13 +1209,7 @@ func cmdVerify(args []string) int {
 	name := nonFlags[0]
 	inputCode := nonFlags[1]
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
+	// Collect password before acquiring the lock.
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1165,6 +1217,13 @@ func cmdVerify(args []string) int {
 		return exitError
 	}
 	defer zeroBytes([]byte(password))
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
@@ -1297,13 +1356,8 @@ func cmdChangePassword(args []string) int {
 		return exitUsage
 	}
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
+	// Collect all passwords before acquiring the lock so the lock
+	// is held only during the brief load→re-encrypt→save operation.
 	fmt.Fprint(os.Stderr, "Current master password: ")
 	oldPassword, err := readLine()
 	if err != nil {
@@ -1311,12 +1365,6 @@ func cmdChangePassword(args []string) int {
 		return exitError
 	}
 	defer zeroBytes([]byte(oldPassword))
-
-	data, oldKey, _, existingIters, err := loadVault(globalVaultPath, oldPassword)
-	if err != nil {
-		return vaultErrCode(err)
-	}
-	defer zeroBytes(oldKey)
 
 	fmt.Fprint(os.Stderr, "Enter new master password: ")
 	newPassword, err := readLine()
@@ -1342,6 +1390,19 @@ func cmdChangePassword(args []string) int {
 		fmt.Fprintln(os.Stderr, "error: passwords do not match")
 		return exitError
 	}
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
+	data, oldKey, _, existingIters, err := loadVault(globalVaultPath, oldPassword)
+	if err != nil {
+		return vaultErrCode(err)
+	}
+	defer zeroBytes(oldKey)
 
 	newIters := existingIters
 	if *itersFlag > 0 {
@@ -1379,13 +1440,7 @@ func cmdRename(args []string) int {
 	}
 	oldName, newName := args[0], args[1]
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
+	// Collect password before acquiring the lock.
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1393,6 +1448,13 @@ func cmdRename(args []string) int {
 		return exitError
 	}
 	defer zeroBytes([]byte(password))
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
@@ -1521,13 +1583,7 @@ func cmdRemove(args []string) int {
 	}
 	name := fs.Arg(0)
 
-	unlock, lockErr := acquireVaultLock(globalVaultPath)
-	if lockErr != nil {
-		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
-		return exitError
-	}
-	defer unlock()
-
+	// Collect password before acquiring the lock.
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1535,6 +1591,13 @@ func cmdRemove(args []string) int {
 		return exitError
 	}
 	defer zeroBytes([]byte(password))
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {

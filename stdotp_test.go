@@ -1339,7 +1339,10 @@ func TestVault_MalformedHeaders(t *testing.T) {
 }
 
 // TestVault_AADHeaderTampering verifies that AES-GCM Additional Authenticated Data (AAD)
-// cryptographically detects and rejects tampering of the JSON envelope headers (e.g. kdf_iterations or salt).
+// cryptographically detects and rejects tampering of the JSON envelope headers via the
+// full loadVault path. Note: changing kdf_iterations also changes the derived key, so
+// this test proves the AAD + key combination fails. For an isolated AAD-only proof,
+// see TestVault_AADDirectProof.
 func TestVault_AADHeaderTampering(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "vault.json")
@@ -1373,6 +1376,44 @@ func TestVault_AADHeaderTampering(t *testing.T) {
 	_, _, _, _, err = loadVault(path, "testpass")
 	if !errors.Is(err, errWrongPassword) {
 		t.Errorf("expected errWrongPassword when header AAD is tampered, got: %v", err)
+	}
+}
+
+// TestVault_AADDirectProof directly proves that AES-GCM AAD is enforced
+// independently of the encryption key. It uses the IDENTICAL key and ciphertext
+// but passes different AAD to decryptVault(). This specifically isolates the
+// AAD binding from key-derivation effects — the proof the reviewer requested.
+func TestVault_AADDirectProof(t *testing.T) {
+	salt := []byte("testsalt12345678") // exactly 16 bytes
+	key := pbkdf2([]byte("password"), salt, 1000, 32)
+	saltB64 := base64.StdEncoding.EncodeToString(salt)
+
+	// Encrypt with the legitimate AAD.
+	realAAD := vaultAAD(vaultFormatVersion, vaultKDF, 1000, saltB64)
+	data := VaultData{Accounts: []Account{
+		{Name: "proof-acct", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"},
+	}}
+	nonce, ciphertext, err := encryptVault(data, key, realAAD)
+	if err != nil {
+		t.Fatalf("encryptVault: %v", err)
+	}
+
+	// Attempt decryption with the SAME key and ciphertext but ALTERED AAD.
+	// This simulates an attacker modifying the JSON header without re-encrypting.
+	// Only the AAD differs; the key is identical.
+	tamperedAAD := vaultAAD(vaultFormatVersion, vaultKDF, 1001, saltB64) // iterations changed: 1000→1001
+	_, err = decryptVault(nonce, ciphertext, key, tamperedAAD)
+	if err == nil {
+		t.Fatal("SECURITY: decryptVault succeeded with tampered AAD and same key — AAD binding is broken!")
+	}
+
+	// Sanity check: the real AAD must still work.
+	dec, err := decryptVault(nonce, ciphertext, key, realAAD)
+	if err != nil {
+		t.Fatalf("decryptVault with correct AAD failed unexpectedly: %v", err)
+	}
+	if len(dec.Accounts) != 1 || dec.Accounts[0].Name != "proof-acct" {
+		t.Errorf("decrypted data mismatch: %+v", dec.Accounts)
 	}
 }
 
