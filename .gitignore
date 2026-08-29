@@ -1,13 +1,18 @@
-﻿# Compiled binary
+# Compiled binary
 stdotp
 stdotp.exe
+*.exe
 
-# Test binary
+# Test binary & coverage
 *.test
 *.test.exe
+coverage
+coverage.out
+*.out
 
 # Temp vault files written during tests
 .stdotp-*.tmp
+*.lock
 
 # OS junk
 .DS_Store

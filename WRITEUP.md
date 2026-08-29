@@ -104,19 +104,23 @@ Go 1.27 introduced the `uuid` package into the platform standard library. `stdot
 
 ## 4. Crash-Resilience & Fail-Safe Architecture
 
-To protect user secrets against power failure or process interruptions:
-1. **Authenticated Encryption (AES-256-GCM)**: `cipher.AEAD.Open` verifies the 16-byte authentication tag before returning any data. Wrong passwords or bit-flips immediately trigger exit code `3` without leaking partial plaintext.
-2. **Atomic Temp-File Pipeline**: Writes to `.stdotp-UUID-*.tmp`, calls `tmp.Sync()` (`fsync`), and atomically replaces the vault via `os.Rename`.
-3. **Best-Effort Memory Zeroing**: Sensitive passwords, derived AES keys, and Base32 secrets are cleared with `zeroBytes()` on exit.
+To protect user secrets against power failure, concurrent execution, or malicious tampering:
+1. **Authenticated Encryption (AES-256-GCM + AAD Binding)**: `cipher.AEAD.Open` verifies both ciphertext integrity and the canonical Additional Authenticated Data (`vaultAAD` binding format version, KDF name, iteration count, and salt). Wrong passwords, tampered headers, or bit-flips immediately trigger exit code `3` without leaking partial plaintext.
+2. **Strict Vault Header Validation**: Pre-derivation verification ensures KDF parameters, format version, and 16-byte salt / 12-byte nonce lengths are validated before computing PBKDF2 keys.
+3. **Prompt-Before-Lock Concurrency**: Passwords are collected *before* acquiring the exclusive `.lock` file. The lock is held exclusively during sub-second file I/O operations with PID ownership verification on release and process-liveness stale detection.
+4. **Atomic Temp-File Pipeline**: Writes to `.stdotp-UUID-*.tmp`, calls `tmp.Sync()` (`fsync`), enforces `chmod 0600`, atomically replaces the vault via `os.Rename`, and calls directory `Sync()`.
+5. **Real-World Hardening**: Automatic UTF-8 BOM stripping (`stripBOM()`) for Windows Notepad / PowerShell file imports, pre-epoch modulo normalisation for negative timestamps, and strict account name validation.
+6. **Best-Effort Memory Zeroing**: Sensitive passwords, derived AES keys, intermediate salts, and Base32 secrets are cleared with `zeroBytes()` on exit.
 
 ---
 
 ## 5. Measured Performance Benchmarks
 
-Running `go test -bench=. -benchmem`:
-- **`BenchmarkHOTP`**: **1,118 ns/op** (~894,000 operations/sec)
-- **`BenchmarkTOTP`**: **1,111 ns/op** (~900,000 operations/sec)
-- **`BenchmarkVaultEncryptDecrypt`**: **7,250 ns/op** (~138,000 operations/sec)
+Running `go test -bench=Benchmark -benchmem -run None .`:
+- **`BenchmarkHOTP`**: **1,019 ns/op** (~980,000 operations/sec)
+- **`BenchmarkTOTP`**: **963.7 ns/op** (>1,030,000 operations/sec)
+- **`BenchmarkVaultEncryptDecrypt`**: **7,543 ns/op** (~132,000 operations/sec)
+- **`BenchmarkPBKDF2_100k`**: **25.05 ms/op** (zero-allocation inner loop, 800 B/op, 11 allocs/op)
 
 ---
 

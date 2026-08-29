@@ -55,3 +55,15 @@ step is needed.
 Go 1.27 introduced RFC 9562 compliant `uuid` directly into the standard library.
 `stdotp` uses `uuid.New().String()` to assign immutable account identifiers and create
 collision-free temporary files during atomic vault updates, cleanly replacing `github.com/google/uuid`.
+
+### Why OS-level lockfile rather than third-party flock?
+
+`stdotp` avoids third-party locking libraries (`github.com/gofrs/flock`, etc.) by using
+pure standard library `os.OpenFile(..., os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)` with
+process PID registration, PID-verified release, and `/proc/<pid>` liveness checks on Linux.
+
+### Why UTF-8 BOM handling via pure `strings`?
+
+To seamlessly support files created on Windows via Notepad or PowerShell `Out-File -Encoding UTF8`,
+`stdotp` implements `stripBOM` using `strings.TrimPrefix(s, "\xef\xbb\xbf")`, avoiding external
+text encoding packages (`golang.org/x/text/encoding`).

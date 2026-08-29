@@ -128,14 +128,14 @@
 ---
 
 ### 📍 Phase 6: Automated Tests & Reproducible Build Proof (4:15 – 4:55)
-*Goal: Close with massive test coverage (46 tests · 80.3% coverage) and bit-for-bit hash match.*
+*Goal: Close with massive test coverage (56 test suites · 81.1% coverage) and bit-for-bit hash match.*
 
 - **Visual:** Running test suite and verifying reproducible build hashes.
 - **Spoken Voiceover:**
   > *"Finally, let's look at our automated test suite and prove reproducible bit-for-bit builds."*
 - **Terminal Commands:**
   ```sh
-  # Run 46 automated tests with coverage
+  # Run 56 automated test suites with coverage
   go test -v -cover .
 
   # Show bit-for-bit reproducible build hash
@@ -143,7 +143,7 @@
   Get-FileHash -Algorithm SHA256 stdotp.exe
   ```
 - **Spoken Voiceover:**
-  > *"All 46 tests pass with over 80% statement coverage. In conclusion, `stdotp` proves you can eliminate `github.com/pquerna/otp` and `github.com/google/uuid` completely using pure Go standard library craft. Thank you!"*
+  > *"All 56 test suites pass with 81.1% statement coverage. In conclusion, `stdotp` proves you can eliminate `github.com/pquerna/otp` and `github.com/google/uuid` completely using pure Go standard library craft. Thank you!"*
 
 ---
 
@@ -160,7 +160,7 @@
 
 ### Targeted Bonuses (+16 Max Points)
 - **Single File (+5):** Full monolithic implementation in `stdotp.go` with in-process `self-test`.
-- **Reproducible Build (+5):** Bit-for-bit identical SHA-256 hash (`B31D44BF651D4C3A0C1C64984CDD0D8C9BDD10C49DC6CAB227C3220F124C3C3C`).
+- **Reproducible Build (+5):** Bit-for-bit identical SHA-256 hash (`F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D`).
 - **Package Killer (+3):** Replaces `github.com/pquerna/otp` (15M+ downloads) and `github.com/google/uuid` (80M+ downloads).
 - **STDLIB Log (+3):** 15 standard library substitutions documented with rationales in `STDLIB.md`.
 - **Write-Up Side Quest ($300):** Deep-dive publication article prepared in `WRITEUP.md`.

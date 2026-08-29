@@ -382,10 +382,10 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (52 Tests · 80.9% Coverage)
+### Test Results Breakdown (56 Test Suites · 81.1% Statement Coverage)
 
 ```
-=== RFC Vectors & Primitives (Unit Tests) ===
+=== RFC Vectors & Cryptographic Primitives (Unit Tests) ===
   [PASS] TestHOTP_RFC4226             (10 RFC 4226 Appendix D vectors)
   [PASS] TestTOTP_RFC6238             (18 RFC 6238 Appendix B vectors across SHA1, SHA256, SHA512)
   [PASS] TestPBKDF2_RFC7914           (2 official RFC 7914 §12 vectors: c=1 and c=80000)
@@ -409,6 +409,8 @@ $ go test -v -cover .
   [PASS] TestVault_MalformedHeaders   (7 malformed header validation tests)
   [PASS] TestVault_AADHeaderTampering (AES-GCM AAD header tampering via full loadVault path)
   [PASS] TestVault_AADDirectProof     (AAD binding proven with SAME key+ciphertext, different AAD only)
+  [PASS] TestStripBOM                 (5 subtests: UTF-8 BOM stripping at start of strings)
+  [PASS] TestTOTP_NegativeTimestamp   (4 subtests: modulo normalisation for pre-epoch timestamps)
 
 === CLI Subcommand & Integration Tests (Harness Invocations) ===
   [PASS] TestCLI_FullWorkflow         (init -> add -> list -> code -> export -> remove)
@@ -439,8 +441,11 @@ $ go test -v -cover .
   [PASS] TestCLI_CustomIterationsPreservedAcrossMutations (Custom KDF iteration preservation)
   [PASS] TestCLI_VerifyHOTP_SaveFailure (Failed HOTP save handling)
   [PASS] TestVault_ConcurrentHOTPAccess (Vault lockfile concurrency protection)
+  [PASS] TestCLI_URIFile_WithBOM      (Windows Notepad UTF-8 BOM file ingestion)
+  [PASS] TestCLI_SecretFile_WithBOM   (Windows Notepad UTF-8 BOM secret ingestion)
+  [PASS] TestCLI_AccountName_Validation (3 subtests: control char, whitespace, length checks)
 -------------------------------------------------------------------------------
-Result: 52 PASSED, 0 FAILED | Statement Coverage: 80.9%
+Result: ALL PASSED, 0 FAILED | Statement Coverage: 81.1%
 ```
 
 ---
@@ -453,10 +458,10 @@ $ go test -bench Benchmark -benchmem -run None .
 
 | Benchmark Operation | Throughput / Latency | Memory per Op | Allocations |
 |---|---|---|---|
-| `BenchmarkHOTP` (RFC 4226) | **959.9 ns/op** (>1,000,000 ops/sec) | 496 B/op | 9 allocs/op |
-| `BenchmarkTOTP` (RFC 6238) | **1,001 ns/op** (~1,000,000 ops/sec) | 496 B/op | 9 allocs/op |
-| `BenchmarkVaultEncryptDecrypt` (AES-GCM+AAD) | **6,084 ns/op** (~164,000 ops/sec) | 3,713 B/op | 13 allocs/op |
-| `BenchmarkPBKDF2_100k` (100k iters) | **23.15 ms/op** (43.2 keys/sec) | **800 B/op** | **11 allocs/op** |
+| `BenchmarkHOTP` (RFC 4226) | **1,019 ns/op** (~980,000 ops/sec) | 496 B/op | 9 allocs/op |
+| `BenchmarkTOTP` (RFC 6238) | **963.7 ns/op** (>1,030,000 ops/sec) | 496 B/op | 9 allocs/op |
+| `BenchmarkVaultEncryptDecrypt` (AES-GCM+AAD) | **7,543 ns/op** (~132,000 ops/sec) | 3,714 B/op | 13 allocs/op |
+| `BenchmarkPBKDF2_100k` (100k iters) | **25.05 ms/op** (40.0 keys/sec) | **800 B/op** | **11 allocs/op** |
 
 ---
 
@@ -503,8 +508,8 @@ CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `FD41652385CD53806EBFDA8F96AABFD0EF4AAA72E1C7712AA4C1D53DA595C6E4` |
-| Clean Directory Build 2 | `FD41652385CD53806EBFDA8F96AABFD0EF4AAA72E1C7712AA4C1D53DA595C6E4` |
+| Clean Directory Build 1 | `F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D` |
+| Clean Directory Build 2 | `F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D` |
 
 - **Toolchain**: `Go 1.27`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).

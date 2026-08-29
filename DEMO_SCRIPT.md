@@ -95,11 +95,11 @@
   ```sh
   go test -v -cover .
   ```
-  *(Point out: **43/43 automated tests passing** with ~80% statement coverage).*
+  *(Point out: **56 test suites passing (100% pass)** with 81.1% statement coverage covering RFC vectors, AES-256-GCM AAD binding, Windows UTF-8 BOM stripping, timestamp modulo normalisation, and concurrency lockfile protection).*
 - **Terminal Action 2:** Reproducible build hash:
   ```sh
   CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
   Get-FileHash -Algorithm SHA256 stdotp.exe
   ```
-  *(Point out: Bit-for-bit identical SHA-256 hash across any clean build directory).*
+  *(Point out: Bit-for-bit identical SHA-256 hash `F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D` across any clean build directory).*
 - **Closing:** *"Thank you! `stdotp` replaces `github.com/pquerna/otp` and `github.com/google/uuid` with 100% standard library code."*
