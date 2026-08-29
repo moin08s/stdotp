@@ -29,7 +29,7 @@
   ```sh
   ./stdotp self-test
   ```
-  *(Point out: In-process validation of RFC 4226 HOTP, RFC 6238 TOTP across SHA1/256/512, RFC 7914 §12 PBKDF2 vectors, AES-256-GCM round-trip, and native Go 1.27 stdlib `uuid` generation).*
+  *(Point out: In-process validation of RFC 4226 HOTP, RFC 6238 TOTP across SHA1/256/512, RFC 7914 §11 PBKDF2 vectors, AES-256-GCM round-trip, and native Go 1.27 stdlib `uuid` generation).*
 
 ---
 

@@ -109,14 +109,14 @@ func TestTOTP_RFC6238(t *testing.T) {
 }
 
 // ============================================================
-// RFC 7914 §12 — PBKDF2-HMAC-SHA256 test vectors
+// RFC 7914 §11 — PBKDF2-HMAC-SHA256 test vectors
 // ============================================================
 
 // TestPBKDF2_RFC7914 verifies both PBKDF2-HMAC-SHA256 test vectors from
-// RFC 7914 §12 ("Test Vectors for PBKDF2 with HMAC-SHA-256").
+// RFC 7914 §11 ("Test Vectors for PBKDF2 with HMAC-SHA-256").
 //
 // Source: Percival, C. and Josefsson, S., "The scrypt Password-Based Key
-// Derivation Function," RFC 7914, Section 12, August 2016.
+// Derivation Function," RFC 7914, Section 11, August 2016.
 //
 // A round-trip test (encrypt then decrypt) only proves that our implementation
 // is self-consistent. These vectors prove it matches the published standard

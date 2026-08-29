@@ -55,7 +55,7 @@
   ./stdotp self-test
   ```
 - **Spoken Voiceover:**
-  > *"In a fraction of a second, it executes official RFC 4226 HOTP vectors, RFC 6238 TOTP across SHA1, SHA256, and SHA512, RFC 7914 §12 PBKDF2 vectors, AES-256-GCM authenticated encryption, and native Go 1.27 standard library UUID generation."*
+  > *"In a fraction of a second, it executes official RFC 4226 HOTP vectors, RFC 6238 TOTP across SHA1, SHA256, and SHA512, RFC 7914 §11 PBKDF2 vectors, AES-256-GCM authenticated encryption, and native Go 1.27 standard library UUID generation."*
 
 ---
 

@@ -156,7 +156,7 @@ graph TD
 
 ```mermaid
 flowchart TD
-    subgraph KDF["Key Derivation Function (RFC 2898 §5.2 / RFC 7914 §12)"]
+    subgraph KDF["Key Derivation Function (RFC 2898 §5.2 / RFC 7914 §11)"]
         Password[Master Password] --> PBKDF2Loop["PBKDF2-HMAC-SHA256 Loop<br/>600,000 Iterations (OWASP 2026)"]
         Salt["16-byte CSPRNG Salt (crypto/rand)"] --> PBKDF2Loop
         PBKDF2Loop --> DerivedKey["32-byte AES-256 Key"]
@@ -182,13 +182,13 @@ $$U_j = \text{PRF}(\text{Password}, U_{j-1}) \quad \text{for } j = 2 \dots c$$
 
 - **Iterations ($c$)**: `600,000` default (OWASP 2026 Password Storage recommendation for modern GPU resilience), configurable via `--iterations` upon initialization. Existing custom iteration counts are strictly preserved across mutations (`add`, `rename`, `remove`, `code`, `verify`).
 - **Zero-Allocation Inner Loop**: Reuses slice buffers (`uBuf[:0]`) to completely eliminate heap allocation overhead in the derivation loop (800 B/op and 11 allocs/op in benchmarks).
-- **Verification**: Validated against official **RFC 7914 §12** test vectors ($c=1$ and $c=80,000$).
+- **Verification**: Validated against official **RFC 7914 §11** test vectors ($c=1$ and $c=80,000$).
 
 #### Authenticated Cipher (AES-256-GCM with AAD)
 - **Mode**: Galois/Counter Mode (GCM) via `crypto/aes` and `crypto/cipher`.
 - **Nonce Freshness**: A fresh 12-byte CSPRNG nonce (`crypto/rand`) is generated on every single vault write. Nonce reuse with the same key is strictly prevented.
-- **Additional Authenticated Data (AAD)**: The header metadata (`format_version`, `kdf`, `kdf_iterations`, `kdf_salt`) is cryptographically bound into the GCM authentication tag as AAD. Any tampering with the plaintext JSON headers immediately triggers GCM authentication failure (exit code 3).
-- **Integrity Guarantee**: Automatic 16-byte Poly1305/GHASH authentication tag verification prevents bit-flipping and tampering. Any corrupted byte, wrong password, or tampered header immediately triggers exit code 3 without emitting partial plaintext.
+- **Additional Authenticated Data (AAD)**: The header metadata (`format_version`, `kdf`, `kdf_iterations`, `kdf_salt`) is cryptographically bound into the GCM authentication tag as AAD. Any tampering with the plaintext JSON headers causes authenticated decryption to fail (exit code 3), ensuring that header manipulation cannot silently alter KDF parameters or bypass security bounds.
+- **Integrity Guarantee**: Automatic 16-byte Poly1305/GHASH authentication tag verification prevents bit-flipping and tampering. Any corrupted byte, wrong password, or tampered header immediately causes decryption to fail (exit code 3) without emitting partial plaintext.
 
 ---
 
@@ -349,7 +349,7 @@ $ ./stdotp self-test
 === stdotp In-Process Self-Test Suite ===
 [PASS] RFC 4226 HOTP test vectors (10/10)
 [PASS] RFC 6238 TOTP test vectors (SHA1/256/512)
-[PASS] RFC 7914 §12 PBKDF2-HMAC-SHA256 test vectors
+[PASS] RFC 7914 §11 PBKDF2-HMAC-SHA256 test vectors
 [PASS] Vault AES-256-GCM authenticated encryption & round-trip
 [PASS] Google Authenticator otpauth:// URI parser & builder
 [PASS] Go 1.27 stdlib uuid (RFC 9562) generation
@@ -388,7 +388,7 @@ $ go test -v -cover .
 === RFC Vectors & Cryptographic Primitives (Unit Tests) ===
   [PASS] TestHOTP_RFC4226             (10 RFC 4226 Appendix D vectors)
   [PASS] TestTOTP_RFC6238             (18 RFC 6238 Appendix B vectors across SHA1, SHA256, SHA512)
-  [PASS] TestPBKDF2_RFC7914           (2 official RFC 7914 §12 vectors: c=1 and c=80000)
+  [PASS] TestPBKDF2_RFC7914           (2 official RFC 7914 §11 vectors: c=1 and c=80000)
   [PASS] TestVaultEncryptDecrypt      (AES-256-GCM round-trip & fresh nonce check)
   [PASS] TestVaultTamperedCiphertext  (GCM bit-flip rejection)
   [PASS] TestVaultWrongKey            (GCM incorrect key rejection)
@@ -473,7 +473,7 @@ $ go test -bench Benchmark -benchmem -run None .
 |---|---|---|---|
 | **OTP Engine** | `github.com/pquerna/otp` | `crypto/hmac` + `crypto/sha*` + `encoding/base32` | Full RFC 4226 & 6238 HOTP+TOTP from scratch |
 | **UUIDs** | `github.com/google/uuid` | `uuid` (Go 1.27 stdlib) | Native RFC 9562 UUID support (`uuid.New()`) |
-| **KDF** | `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` | RFC 2898 §5.2 / RFC 7914 §12 compliant |
+| **KDF** | `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` | RFC 2898 §5.2 / RFC 7914 §11 compliant |
 | **Cipher** | `golang.org/x/crypto/nacl` | `crypto/aes` + `crypto/cipher` | Authenticated AES-256-GCM AEAD mode with AAD |
 | **CLI Framework** | `github.com/spf13/cobra` | `flag` + `os.Args` dispatch | Subcommand routing without reflection bloat |
 | **CLI Framework** | `github.com/urfave/cli` | `flag` + `os.Args` dispatch | Standard library argument parsing |

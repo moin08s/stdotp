@@ -92,7 +92,7 @@ func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
 ```
 
 ### Optimization: Reusing the HMAC Context
-By invoking `prf.Reset()` on the HMAC instance rather than allocating `hmac.New()` inside the 600,000-iteration loop, memory allocations dropped by **99.9%**, enabling ~175ms key derivation on desktop CPUs. This implementation passes all published test vectors in **RFC 7914 §12**.
+By invoking `prf.Reset()` on the HMAC instance rather than allocating `hmac.New()` inside the 600,000-iteration loop, memory allocations dropped by **99.9%**, enabling ~175ms key derivation on desktop CPUs. This implementation passes all published test vectors in **RFC 7914 §11**.
 
 ---
 
