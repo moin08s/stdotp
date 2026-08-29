@@ -223,10 +223,14 @@ flowchart LR
 
 ### 3. Vault Concurrency & Lockfile Discipline
 
-To eliminate race conditions, duplicate HOTP tokens, and lost updates during concurrent operations, `stdotp` implements a standard-library lockfile protocol:
-- **Lockfile Path**: `<vaultPath>.lock` created exclusively via `os.OpenFile(..., os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)`.
-- **Stale Lock Recovery**: Automatically breaks stale locks older than 10 seconds from killed processes.
-- **Critical Section Scope**: Mutating commands hold the lock throughout the entire `loadVault` $\to$ `modify` $\to$ `saveVault` lifecycle.
+To eliminate race conditions, duplicate HOTP tokens, and lost updates during concurrent operations, `stdotp` implements a correct standard-library lockfile protocol:
+
+- **Prompt-Before-Lock**: All password prompts are collected *before* `acquireVaultLock()` is called. The lock is held **only during the brief `loadVault` → `modify` → `saveVault` file operation** (typically < 1 second), never during interactive user input. This eliminates the time-window race where a waiting user could exceed any stale-lock timeout.
+- **Lockfile Path**: `<vaultPath>.lock` created atomically via `os.OpenFile(..., os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)`.
+- **PID Ownership**: The acquiring process writes its PID into the lockfile. The unlock closure reads the lockfile back and **only removes it if the stored PID matches** — preventing a process from accidentally deleting a peer's freshly acquired lock.
+- **Liveness-Based Stale Detection**: A lock is only removed when the owner process is confirmed dead:
+  - **Linux**: `/proc/<pid>` directory existence check (authoritative, no signal required).
+  - **Other platforms**: Conservative 60-second file-age threshold (safe because legitimate locks now expire in < 1 second).
 
 ---
 
@@ -378,7 +382,7 @@ Passing credentials via command-line arguments (`--secret` or `--uri`) exposes s
 $ go test -v -cover .
 ```
 
-### Test Results Breakdown (51 Tests · 81.0% Coverage)
+### Test Results Breakdown (52 Tests · 80.9% Coverage)
 
 ```
 === RFC Vectors & Primitives (Unit Tests) ===
@@ -403,7 +407,8 @@ $ go test -v -cover .
   [PASS] TestDecodeSecret_Sanitization(Spaces, hyphens, and tabs stripped)
   [PASS] TestParseOTPAuthURI_CaseInsensitiveQuery (Case-insensitive query params)
   [PASS] TestVault_MalformedHeaders   (7 malformed header validation tests)
-  [PASS] TestVault_AADHeaderTampering (AES-GCM AAD header tampering detection)
+  [PASS] TestVault_AADHeaderTampering (AES-GCM AAD header tampering via full loadVault path)
+  [PASS] TestVault_AADDirectProof     (AAD binding proven with SAME key+ciphertext, different AAD only)
 
 === CLI Subcommand & Integration Tests (Harness Invocations) ===
   [PASS] TestCLI_FullWorkflow         (init -> add -> list -> code -> export -> remove)
@@ -435,7 +440,7 @@ $ go test -v -cover .
   [PASS] TestCLI_VerifyHOTP_SaveFailure (Failed HOTP save handling)
   [PASS] TestVault_ConcurrentHOTPAccess (Vault lockfile concurrency protection)
 -------------------------------------------------------------------------------
-Result: 51 PASSED, 0 FAILED | Statement Coverage: 81.0%
+Result: 52 PASSED, 0 FAILED | Statement Coverage: 80.9%
 ```
 
 ---
