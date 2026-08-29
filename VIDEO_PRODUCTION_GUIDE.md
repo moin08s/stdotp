@@ -55,7 +55,7 @@
   ./stdotp self-test
   ```
 - **Spoken Voiceover:**
-  > *"In a fraction of a second, it executes official RFC 4226 HOTP vectors, RFC 6238 TOTP across SHA1, SHA256, and SHA512, RFC 7914 §11 PBKDF2 vectors, AES-256-GCM authenticated encryption, and native Go 1.27 standard library UUID generation."*
+  > *"In a fraction of a second, it executes official RFC 4226 HOTP vectors, RFC 6238 TOTP across SHA1, SHA256, and SHA512, RFC 7914 §12 PBKDF2 vectors, AES-256-GCM authenticated encryption, and native Go 1.27 standard library UUID generation."*
 
 ---
 
@@ -139,7 +139,7 @@
   go test -v -cover .
 
   # Show bit-for-bit reproducible build hash
-  CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
+  CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-buildid=" -o stdotp .
   Get-FileHash -Algorithm SHA256 stdotp.exe
   ```
 - **Spoken Voiceover:**
@@ -160,7 +160,7 @@
 
 ### Targeted Bonuses (+16 Max Points)
 - **Single File (+5):** Full monolithic implementation in `stdotp.go` with in-process `self-test`.
-- **Reproducible Build (+5):** Bit-for-bit identical SHA-256 hash (`F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D`).
+- **Reproducible Build (+5):** Bit-for-bit identical SHA-256 hash (`09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958`).
 - **Package Killer (+3):** Replaces `github.com/pquerna/otp` (15M+ downloads) and `github.com/google/uuid` (80M+ downloads).
 - **STDLIB Log (+3):** 15 standard library substitutions documented with rationales in `STDLIB.md`.
 - **Write-Up Side Quest ($300):** Deep-dive publication article prepared in `WRITEUP.md`.

@@ -1,0 +1,59 @@
+================================================================================
+stdotp — Dependency & Air-Gapped Compilation Proof (Zero Dependency 2026)
+================================================================================
+
+Track: Track E (Security & Crypto Utilities)
+Language: Go 1.27
+Repository: https://github.com/moin08s/stdotp
+
+--------------------------------------------------------------------------------
+1. Zero Dependency Proof (go list -m all)
+--------------------------------------------------------------------------------
+$ go list -m all
+stdotp
+
+Result: Exactly 1 module listed (stdotp itself). Zero 3rd-party dependencies.
+
+--------------------------------------------------------------------------------
+2. Module Definition (go.mod)
+--------------------------------------------------------------------------------
+$ cat go.mod
+module stdotp
+
+go 1.27.0
+
+Result: Empty 'require' block. 100% Go standard library.
+
+--------------------------------------------------------------------------------
+3. Air-Gapped Offline Compilation (GOPROXY=off)
+--------------------------------------------------------------------------------
+$ GOPROXY=off go build -v ./...
+(exits with code 0, zero network sockets opened)
+
+Result: Successfully compiles in fully air-gapped, offline environments.
+
+--------------------------------------------------------------------------------
+4. Bit-for-Bit Deterministic Reproducible Build Verification
+--------------------------------------------------------------------------------
+Build Command:
+$ CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-buildid=" -o stdotp.exe .
+
+SHA-256 Checksum:
+09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958
+
+Verification:
+- Clean Directory 1 (Local Workspace): 09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958
+- Clean Directory 2 (Isolated /tmp):   09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958
+- Result: 100% Bit-for-Bit Identical Hash across isolated environments.
+
+--------------------------------------------------------------------------------
+5. Automated Test Suite & Coverage
+--------------------------------------------------------------------------------
+$ go test -v -cover .
+Result: 56/56 Test Suites PASS (100% pass rate) | 81.1% Statement Coverage
+
+--------------------------------------------------------------------------------
+6. Toolchain Environment
+--------------------------------------------------------------------------------
+$ go version
+go version go1.27.0 windows/amd64

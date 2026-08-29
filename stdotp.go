@@ -152,7 +152,7 @@ func deriveKey(password string, salt []byte, iterations int) []byte {
 //	U1 = PRF(Password, Salt || INT(i))
 //	Uj = PRF(Password, U_{j-1})   for j = 2..c
 //
-// The RFC 7914 §11 test vectors in stdotp_test.go verify that this
+// The RFC 7914 §12 test vectors in stdotp_test.go verify that this
 // implementation matches the published standard. Buffer reuse with uBuf
 // eliminates heap allocations inside the inner loop.
 func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
@@ -1775,14 +1775,14 @@ func cmdSelfTest() int {
 	}
 	fmt.Println("[PASS] RFC 6238 TOTP test vectors (SHA1/256/512)")
 
-	// 3. PBKDF2 RFC 7914 §11
+	// 3. PBKDF2 RFC 7914 §12
 	dk := pbkdf2([]byte("passwd"), []byte("salt"), 1, 64)
 	wantHex := "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc49ca9cccf179b645991664b39d77ef317c71b845b1e30bd509112041d3a19783"
 	if hex.EncodeToString(dk) != wantHex {
-		fmt.Fprintln(os.Stderr, "[FAIL] PBKDF2 RFC 7914 §11 vector mismatch")
+		fmt.Fprintln(os.Stderr, "[FAIL] PBKDF2 RFC 7914 §12 vector mismatch")
 		return exitError
 	}
-	fmt.Println("[PASS] RFC 7914 §11 PBKDF2-HMAC-SHA256 test vectors")
+	fmt.Println("[PASS] RFC 7914 §12 PBKDF2-HMAC-SHA256 test vectors")
 
 	// 4. AES-256-GCM Round-trip with AAD
 	salt := []byte("1234567890123456")

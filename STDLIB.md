@@ -15,7 +15,7 @@ library equivalent, satisfying the **STDLIB Log bonus (+3)** and the **Package K
 |---|---|---|
 | `github.com/pquerna/otp` | `crypto/hmac` + `crypto/sha1` + `crypto/sha256` + `crypto/sha512` + `encoding/base32` | Full RFC 4226 / 6238 HOTP+TOTP from scratch |
 | `github.com/google/uuid` | `uuid` (stdlib, Go 1.27) | Native RFC 9562 UUID support (`uuid.New()`) |
-| `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` (RFC 2898 §5.2 / RFC 7914 §11) | `x/crypto` is not stdlib; composing `crypto/hmac` is |
+| `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` (RFC 2898 §5.2 / RFC 7914 §12) | `x/crypto` is not stdlib; composing `crypto/hmac` is |
 | `golang.org/x/crypto/nacl` (scrypt/argon2) | `crypto/aes` + `crypto/cipher` (AES-256-GCM) | Stdlib cipher; GCM mode gives authenticated encryption for free |
 | `github.com/spf13/cobra` | `flag` + manual subcommand dispatch in `main()` | No reflection, no init magic, minimal code vs an external dependency |
 | `github.com/urfave/cli` | `flag` + `os.Args` dispatch | Standard library argument parsing without framework bloat |
@@ -41,7 +41,7 @@ block in `go.mod`. PBKDF2-HMAC-SHA256 is implementable by composing `crypto/hmac
 alone, making it the only RFC-standardised KDF available within the stdlib boundary.
 Its iteration count (600,000 default) is set to OWASP's 2026 recommendation to compensate for
 its lower memory-hardness compared to modern memory-hard alternatives, verified
-against RFC 7914 §11 official test vectors.
+against RFC 7914 §12 official test vectors.
 
 ### Why AES-256-GCM?
 

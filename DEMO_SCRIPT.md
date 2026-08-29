@@ -29,7 +29,7 @@
   ```sh
   ./stdotp self-test
   ```
-  *(Point out: In-process validation of RFC 4226 HOTP, RFC 6238 TOTP across SHA1/256/512, RFC 7914 §11 PBKDF2 vectors, AES-256-GCM round-trip, and native Go 1.27 stdlib `uuid` generation).*
+  *(Point out: In-process validation of RFC 4226 HOTP, RFC 6238 TOTP across SHA1/256/512, RFC 7914 §12 PBKDF2 vectors, AES-256-GCM round-trip, and native Go 1.27 stdlib `uuid` generation).*
 
 ---
 
@@ -98,8 +98,8 @@
   *(Point out: **56 test suites passing (100% pass)** with 81.1% statement coverage covering RFC vectors, AES-256-GCM AAD binding, Windows UTF-8 BOM stripping, timestamp modulo normalisation, and concurrency lockfile protection).*
 - **Terminal Action 2:** Reproducible build hash:
   ```sh
-  CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
+  CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-buildid=" -o stdotp .
   Get-FileHash -Algorithm SHA256 stdotp.exe
   ```
-  *(Point out: Bit-for-bit identical SHA-256 hash `F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D` across any clean build directory).*
+  *(Point out: Bit-for-bit identical SHA-256 hash `09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958` across any clean build directory).*
 - **Closing:** *"Thank you! `stdotp` replaces `github.com/pquerna/otp` and `github.com/google/uuid` with 100% standard library code."*

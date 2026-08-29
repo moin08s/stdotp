@@ -156,7 +156,7 @@ graph TD
 
 ```mermaid
 flowchart TD
-    subgraph KDF["Key Derivation Function (RFC 2898 §5.2 / RFC 7914 §11)"]
+    subgraph KDF["Key Derivation Function (RFC 2898 §5.2 / RFC 7914 §12)"]
         Password[Master Password] --> PBKDF2Loop["PBKDF2-HMAC-SHA256 Loop<br/>600,000 Iterations (OWASP 2026)"]
         Salt["16-byte CSPRNG Salt (crypto/rand)"] --> PBKDF2Loop
         PBKDF2Loop --> DerivedKey["32-byte AES-256 Key"]
@@ -182,7 +182,7 @@ $$U_j = \text{PRF}(\text{Password}, U_{j-1}) \quad \text{for } j = 2 \dots c$$
 
 - **Iterations ($c$)**: `600,000` default (OWASP 2026 Password Storage recommendation for modern GPU resilience), configurable via `--iterations` upon initialization. Existing custom iteration counts are strictly preserved across mutations (`add`, `rename`, `remove`, `code`, `verify`).
 - **Zero-Allocation Inner Loop**: Reuses slice buffers (`uBuf[:0]`) to completely eliminate heap allocation overhead in the derivation loop (800 B/op and 11 allocs/op in benchmarks).
-- **Verification**: Validated against official **RFC 7914 §11** test vectors ($c=1$ and $c=80,000$).
+- **Verification**: Validated against official **RFC 7914 §12** test vectors ($c=1$ and $c=80,000$).
 
 #### Authenticated Cipher (AES-256-GCM with AAD)
 - **Mode**: Galois/Counter Mode (GCM) via `crypto/aes` and `crypto/cipher`.
@@ -349,7 +349,7 @@ $ ./stdotp self-test
 === stdotp In-Process Self-Test Suite ===
 [PASS] RFC 4226 HOTP test vectors (10/10)
 [PASS] RFC 6238 TOTP test vectors (SHA1/256/512)
-[PASS] RFC 7914 §11 PBKDF2-HMAC-SHA256 test vectors
+[PASS] RFC 7914 §12 PBKDF2-HMAC-SHA256 test vectors
 [PASS] Vault AES-256-GCM authenticated encryption & round-trip
 [PASS] Google Authenticator otpauth:// URI parser & builder
 [PASS] Go 1.27 stdlib uuid (RFC 9562) generation
@@ -388,7 +388,7 @@ $ go test -v -cover .
 === RFC Vectors & Cryptographic Primitives (Unit Tests) ===
   [PASS] TestHOTP_RFC4226             (10 RFC 4226 Appendix D vectors)
   [PASS] TestTOTP_RFC6238             (18 RFC 6238 Appendix B vectors across SHA1, SHA256, SHA512)
-  [PASS] TestPBKDF2_RFC7914           (2 official RFC 7914 §11 vectors: c=1 and c=80000)
+  [PASS] TestPBKDF2_RFC7914           (2 official RFC 7914 §12 vectors: c=1 and c=80000)
   [PASS] TestVaultEncryptDecrypt      (AES-256-GCM round-trip & fresh nonce check)
   [PASS] TestVaultTamperedCiphertext  (GCM bit-flip rejection)
   [PASS] TestVaultWrongKey            (GCM incorrect key rejection)
@@ -473,7 +473,7 @@ $ go test -bench Benchmark -benchmem -run None .
 |---|---|---|---|
 | **OTP Engine** | `github.com/pquerna/otp` | `crypto/hmac` + `crypto/sha*` + `encoding/base32` | Full RFC 4226 & 6238 HOTP+TOTP from scratch |
 | **UUIDs** | `github.com/google/uuid` | `uuid` (Go 1.27 stdlib) | Native RFC 9562 UUID support (`uuid.New()`) |
-| **KDF** | `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` | RFC 2898 §5.2 / RFC 7914 §11 compliant |
+| **KDF** | `golang.org/x/crypto/pbkdf2` | Hand-rolled PBKDF2 loop over `crypto/hmac` | RFC 2898 §5.2 / RFC 7914 §12 compliant |
 | **Cipher** | `golang.org/x/crypto/nacl` | `crypto/aes` + `crypto/cipher` | Authenticated AES-256-GCM AEAD mode with AAD |
 | **CLI Framework** | `github.com/spf13/cobra` | `flag` + `os.Args` dispatch | Subcommand routing without reflection bloat |
 | **CLI Framework** | `github.com/urfave/cli` | `flag` + `os.Args` dispatch | Standard library argument parsing |
@@ -500,16 +500,18 @@ $ GOPROXY=off go build ./...
 (zero external network calls, clean exit 0)
 ```
 
+Raw verifiable proof: see [`deps-proof.txt`](deps-proof.txt).
+
 ### 2. Reproducible Build Verification
 Build command:
 ```sh
-CGO_ENABLED=0 go build -trimpath -ldflags="-buildid=" -o stdotp .
+CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-buildid=" -o stdotp .
 ```
 
 | Build Directory Instance | SHA-256 Checksum |
 |---|---|
-| Clean Directory Build 1 | `F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D` |
-| Clean Directory Build 2 | `F89D7608F3C43338940E61A861910EC83AA1AFB7434F782A5B27F60853CD1E9D` |
+| Clean Directory Build 1 | `09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958` |
+| Clean Directory Build 2 | `09258785B019BA542879A6260434D015FE7C8CD6E3BB122A8AC5E6C83FEE6958` |
 
 - **Toolchain**: `Go 1.27`
 - **Environment**: Standalone build without CGO (`CGO_ENABLED=0`).
