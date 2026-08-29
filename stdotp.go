@@ -42,6 +42,12 @@ var stdinReader = bufio.NewReader(os.Stdin)
 
 // zeroBytes securely overwrites a byte slice with zeros to minimize
 // exposure of sensitive cryptographic material in process memory.
+//
+// Note on Go Memory Hygiene:
+// In Go, strings are immutable and cannot be zeroed in-place. Converting a
+// string to []byte creates a copy. zeroBytes zeros the []byte slice, but
+// the Go runtime/GC may retain string copies elsewhere in memory. Where
+// practical, sensitive data is handled in []byte slices.
 func zeroBytes(b []byte) {
 	for i := range b {
 		b[i] = 0
@@ -112,10 +118,9 @@ func newHMAC(algo string, key []byte) hash.Hash {
 // crypto/hmac. Not a custom algorithm — a faithful standard construction
 // built entirely from stdlib primitives.
 //
-// Iteration count: 600,000 (OWASP Password Storage Cheat Sheet 2026
+// Iteration count: 600,000 default (OWASP Password Storage Cheat Sheet 2026
 // recommendation for PBKDF2-HMAC-SHA256, benchmarked against modern GPU
-// hardware). This number and its source are stated explicitly in the threat
-// model rather than left as an unstated, arbitrary choice.
+// hardware).
 func deriveKey(password string, salt []byte, iterations int) []byte {
 	passBytes := []byte(password)
 	defer zeroBytes(passBytes)
@@ -132,15 +137,13 @@ func deriveKey(password string, salt []byte, iterations int) []byte {
 //	Uj = PRF(Password, U_{j-1})   for j = 2..c
 //
 // The RFC 7914 §12 test vectors in stdotp_test.go verify that this
-// implementation matches the published standard, not just that it
-// round-trips against itself.
+// implementation matches the published standard. Buffer reuse with uBuf
+// eliminates heap allocations inside the inner loop.
 func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
 	const hLen = sha256.Size // 32 bytes
 	numBlocks := (keyLen + hLen - 1) / hLen
 	dk := make([]byte, 0, numBlocks*hLen)
 
-	// Reuse a single HMAC context across iterations to avoid per-iteration
-	// allocations. prf.Reset() brings it back to the initial keyed state.
 	prf := hmac.New(sha256.New, password)
 	var uBuf [hLen]byte
 
@@ -177,35 +180,25 @@ func pbkdf2(password, salt []byte, iterations, keyLen int) []byte {
 // ---- vault (AES-256-GCM at rest, PBKDF2-HMAC key derivation) ----
 
 const (
-	// vaultFormatVersion identifies the KDF + cipher tier used to write this
-	// vault (§11 of the development plan). Bump if KDF or cipher ever changes
-	// so a future reader can tell which tier produced a given file.
+	// vaultFormatVersion identifies the KDF + cipher tier used to write this vault.
 	vaultFormatVersion = 1
 
 	vaultKDF = "PBKDF2-HMAC-SHA256"
 
-	// vaultKDFIterations is 600,000 — the OWASP Password Storage Cheat Sheet
-	// 2026 recommendation for PBKDF2-HMAC-SHA256. Cited explicitly so this
-	// choice is defensible, not arbitrary.
+	// vaultKDFIterations is 600,000 — the OWASP Password Storage Cheat Sheet 2026 default.
 	vaultKDFIterations = 600_000
 
 	vaultSaltLen = 16 // 128-bit salt, from crypto/rand
 )
 
 // VaultFile is the JSON envelope written to disk.
-// Every field is present in plaintext so the format can be understood
-// without reverse-engineering a binary layout — a deliberate "documented,
-// defensible" design choice per Track E's requirements.
 type VaultFile struct {
 	FormatVersion int    `json:"format_version"`
 	KDF           string `json:"kdf"`
 	KDFIterations int    `json:"kdf_iterations"`
-	// KDFSalt: base64-encoded 16 random bytes from crypto/rand.
-	KDFSalt string `json:"kdf_salt"`
-	// Nonce: base64-encoded 12 random bytes from crypto/rand, fresh every write.
-	Nonce string `json:"nonce"`
-	// Ciphertext: base64-encoded AES-256-GCM output; the auth tag rides inside.
-	Ciphertext string `json:"ciphertext"`
+	KDFSalt       string `json:"kdf_salt"`
+	Nonce         string `json:"nonce"`
+	Ciphertext    string `json:"ciphertext"`
 }
 
 // Account holds one TOTP or HOTP entry.
@@ -228,28 +221,62 @@ type VaultData struct {
 
 // Sentinel errors used by loadVault; vaultErrCode maps them to exit codes.
 var (
-	// errVaultMissing is returned when the vault file does not exist.
-	// Fail-safe: never silently auto-create a vault (§2.2 of the plan).
-	errVaultMissing = errors.New("vault not initialized")
-
-	// errWrongPassword is returned when GCM authentication fails.
-	// Fail-safe: never fall through to partial or garbage plaintext (§2.2).
+	errVaultMissing  = errors.New("vault not initialized")
 	errWrongPassword = errors.New("wrong password or corrupted vault")
 )
+
+// vaultAAD constructs canonical Additional Authenticated Data (AAD)
+// to cryptographically bind the JSON header metadata to the AES-GCM ciphertext.
+func vaultAAD(formatVersion int, kdf string, iterations int, saltBase64 string) []byte {
+	return []byte(fmt.Sprintf("stdotp:v%d:%s:%d:%s", formatVersion, kdf, iterations, saltBase64))
+}
+
+// acquireVaultLock acquires an exclusive lock file (<vaultPath>.lock)
+// to prevent race conditions and vault corruption during concurrent operations.
+func acquireVaultLock(vaultPath string) (unlock func(), err error) {
+	lockPath := vaultPath + ".lock"
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0700); err != nil {
+		return nil, fmt.Errorf("create lock dir: %w", err)
+	}
+
+	start := time.Now()
+	for {
+		f, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_RDWR, 0600)
+		if err == nil {
+			// Lock acquired! Write PID and timestamp
+			fmt.Fprintf(f, "pid=%d time=%s\n", os.Getpid(), time.Now().UTC().Format(time.RFC3339Nano))
+			f.Close()
+			return func() {
+				_ = os.Remove(lockPath)
+			}, nil
+		}
+
+		// Check for stale lock (older than 10 seconds)
+		if info, statErr := os.Stat(lockPath); statErr == nil {
+			if time.Since(info.ModTime()) > 10*time.Second {
+				_ = os.Remove(lockPath) // remove stale lock from crashed/killed process
+				continue
+			}
+		}
+
+		if time.Since(start) > 3*time.Second {
+			return nil, errors.New("vault is locked by another process (timeout waiting for lock)")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
 
 // encryptVault marshals data to JSON and encrypts it with AES-256-GCM.
 //
 // A 12-byte nonce is freshly generated from crypto/rand on every call.
-// Reusing a nonce with the same key is the one mistake that breaks GCM's
-// security guarantee; this function never reuses a nonce.
-//
-// The GCM auth tag is embedded inside the returned ciphertext slice
-// automatically by cipher.AEAD.Seal — no separate MAC step is needed.
-func encryptVault(data VaultData, key []byte) (nonce, ciphertext []byte, err error) {
+// Reusing a nonce with the same key breaks GCM's security guarantee.
+// Header metadata is passed as AAD to cryptographically bind envelope headers.
+func encryptVault(data VaultData, key, aad []byte) (nonce, ciphertext []byte, err error) {
 	plaintext, err := json.Marshal(data)
 	if err != nil {
 		return nil, nil, fmt.Errorf("marshal vault data: %w", err)
 	}
+	defer zeroBytes(plaintext)
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -265,18 +292,15 @@ func encryptVault(data VaultData, key []byte) (nonce, ciphertext []byte, err err
 		return nil, nil, fmt.Errorf("generate nonce: %w", err)
 	}
 
-	ciphertext = gcm.Seal(nil, nonce, plaintext, nil)
+	ciphertext = gcm.Seal(nil, nonce, plaintext, aad)
 	return nonce, ciphertext, nil
 }
 
-// decryptVault authenticates and decrypts ciphertext.
+// decryptVault authenticates and decrypts ciphertext using AES-256-GCM and AAD.
 //
-// AES-GCM's authentication check fails on any wrong key or modified byte —
-// cipher.AEAD.Open returns an error rather than partial plaintext.
-// The caller must treat this error as exit code 3 (wrong password / tampered),
-// never fall through. This is a property of using authenticated encryption
-// (GCM) rather than a bare cipher mode.
-func decryptVault(nonce, ciphertext, key []byte) (VaultData, error) {
+// AES-GCM's authentication check fails on any wrong key, modified byte, or tampered
+// AAD header metadata — cipher.AEAD.Open returns an error rather than partial plaintext.
+func decryptVault(nonce, ciphertext, key, aad []byte) (VaultData, error) {
 	block, err := aes.NewCipher(key)
 	if err != nil {
 		return VaultData{}, fmt.Errorf("new AES cipher: %w", err)
@@ -286,12 +310,12 @@ func decryptVault(nonce, ciphertext, key []byte) (VaultData, error) {
 		return VaultData{}, fmt.Errorf("new GCM: %w", err)
 	}
 
-	plaintext, err := gcm.Open(nil, nonce, ciphertext, nil)
+	plaintext, err := gcm.Open(nil, nonce, ciphertext, aad)
 	if err != nil {
-		// GCM authentication failure: wrong password or tampered ciphertext.
-		// Return a generic message — never a partial result.
-		return VaultData{}, errors.New("GCM authentication failed (wrong password or tampered ciphertext)")
+		// GCM authentication failure: wrong password, tampered ciphertext, or tampered header.
+		return VaultData{}, errors.New("GCM authentication failed (wrong password or tampered vault)")
 	}
+	defer zeroBytes(plaintext)
 
 	var data VaultData
 	if err = json.Unmarshal(plaintext, &data); err != nil {
@@ -303,66 +327,72 @@ func decryptVault(nonce, ciphertext, key []byte) (VaultData, error) {
 // loadVault reads and decrypts the vault at path using password.
 //
 // Fail-safe rules (§2.2):
-//   - File missing          → errVaultMissing  (never auto-create)
-//   - File unreadable/corrupt → error           (never attempt repair)
+//   - File missing            → errVaultMissing  (never auto-create)
+//   - Header validation fail  → error            (never attempt repair)
 //   - Wrong password/tampered → errWrongPassword (never partial plaintext)
 //
-// Returns the plaintext data plus the derived key and original salt so the
-// caller can re-encrypt on mutation without re-prompting for the password.
-func loadVault(path, password string) (data VaultData, key, salt []byte, err error) {
+// Returns the plaintext data plus derived key, salt, and existing KDF iterations.
+func loadVault(path, password string) (data VaultData, key, salt []byte, iterations int, err error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return VaultData{}, nil, nil, errVaultMissing
+			return VaultData{}, nil, nil, 0, errVaultMissing
 		}
-		return VaultData{}, nil, nil, fmt.Errorf("read vault file: %w", err)
+		return VaultData{}, nil, nil, 0, fmt.Errorf("read vault file: %w", err)
 	}
 
 	var vf VaultFile
 	if err = json.Unmarshal(raw, &vf); err != nil {
-		return VaultData{}, nil, nil, fmt.Errorf("corrupt vault (JSON parse failed): %w", err)
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault (JSON parse failed): %w", err)
+	}
+
+	// 4. Validate vault headers before key derivation
+	if vf.FormatVersion != vaultFormatVersion {
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault: unsupported format version %d (want %d)", vf.FormatVersion, vaultFormatVersion)
+	}
+	if vf.KDF != vaultKDF {
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault: unsupported KDF %q (want %s)", vf.KDF, vaultKDF)
+	}
+	if vf.KDFIterations < 1000 || vf.KDFIterations > 10_000_000 {
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault: invalid KDF iterations %d (want 1,000-10,000,000)", vf.KDFIterations)
 	}
 
 	salt, err = base64.StdEncoding.DecodeString(vf.KDFSalt)
-	if err != nil {
-		return VaultData{}, nil, nil, fmt.Errorf("corrupt vault (bad salt encoding): %w", err)
+	if err != nil || len(salt) != vaultSaltLen {
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault (bad or invalid salt length): %w", err)
 	}
 	nonce, err := base64.StdEncoding.DecodeString(vf.Nonce)
-	if err != nil {
-		return VaultData{}, nil, nil, fmt.Errorf("corrupt vault (bad nonce encoding): %w", err)
+	if err != nil || len(nonce) != 12 {
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault (bad or invalid nonce length): %w", err)
 	}
 	ciphertext, err := base64.StdEncoding.DecodeString(vf.Ciphertext)
-	if err != nil {
-		return VaultData{}, nil, nil, fmt.Errorf("corrupt vault (bad ciphertext encoding): %w", err)
+	if err != nil || len(ciphertext) < 16 {
+		return VaultData{}, nil, nil, 0, fmt.Errorf("corrupt vault (bad or truncated ciphertext): %w", err)
 	}
 
 	iters := vf.KDFIterations
-	if iters <= 0 {
-		iters = vaultKDFIterations
-	}
 	key = deriveKey(password, salt, iters)
 
-	data, err = decryptVault(nonce, ciphertext, key)
+	// 5. Authenticate header metadata via AES-GCM AAD
+	aad := vaultAAD(vf.FormatVersion, vf.KDF, vf.KDFIterations, vf.KDFSalt)
+	data, err = decryptVault(nonce, ciphertext, key, aad)
 	if err != nil {
-		// GCM auth failure: surface only as errWrongPassword, never the
-		// internal cipher error, to avoid information leakage.
-		return VaultData{}, nil, nil, errWrongPassword
+		return VaultData{}, nil, nil, 0, errWrongPassword
 	}
-	return data, key, salt, nil
+	return data, key, salt, iters, nil
 }
 
 // saveVault encrypts data and atomically writes it to path.
 //
-// "Atomic" means: write to a temp file → Sync → os.Rename.
-// A process killed between the temp-write and the rename always leaves the
-// previous vault intact — the rename is atomic at the OS level on both
-// POSIX and Windows (within the same filesystem). A partial temp file is
-// cleaned up by the deferred remove.
-//
-// A fresh nonce is generated on every call — nonce reuse with the same key
-// breaks GCM's security guarantee and is therefore a hard rule, not a hint.
+// "Atomic" means: write to temp file → Sync → chmod 0600 → os.Rename → dir.Sync().
 func saveVault(path string, data VaultData, key, salt []byte, iterations int) error {
-	nonce, ciphertext, err := encryptVault(data, key)
+	if iterations < 1000 || iterations > 10_000_000 {
+		iterations = vaultKDFIterations
+	}
+
+	saltBase64 := base64.StdEncoding.EncodeToString(salt)
+	aad := vaultAAD(vaultFormatVersion, vaultKDF, iterations, saltBase64)
+	nonce, ciphertext, err := encryptVault(data, key, aad)
 	if err != nil {
 		return fmt.Errorf("encrypt vault: %w", err)
 	}
@@ -371,7 +401,7 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 		FormatVersion: vaultFormatVersion,
 		KDF:           vaultKDF,
 		KDFIterations: iterations,
-		KDFSalt:       base64.StdEncoding.EncodeToString(salt),
+		KDFSalt:       saltBase64,
 		Nonce:         base64.StdEncoding.EncodeToString(nonce),
 		Ciphertext:    base64.StdEncoding.EncodeToString(ciphertext),
 	}
@@ -404,7 +434,7 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 		return fmt.Errorf("fsync temp file: %w", err)
 	}
 	if err = tmp.Chmod(0600); err != nil {
-		// Non-fatal on filesystems that do not support POSIX chmod (e.g. FAT32)
+		// Non-fatal on filesystems that do not support POSIX chmod
 	}
 	if err = tmp.Close(); err != nil {
 		return fmt.Errorf("close temp file: %w", err)
@@ -424,10 +454,6 @@ func saveVault(path string, data VaultData, key, salt []byte, iterations int) er
 // ---- otpauth:// URI parsing and generation ----
 
 // parseOTPAuthURI parses an otpauth:// URI into an Account.
-//
-// Implements the de-facto Google Authenticator Key URI Format spec:
-// https://github.com/google/google-authenticator/wiki/Key-Uri-Format
-// Label format: /<issuer>:<account> or /<account>
 func parseOTPAuthURI(uri string) (Account, error) {
 	u, err := url.Parse(uri)
 	if err != nil {
@@ -542,11 +568,6 @@ func parseOTPAuthURI(uri string) (Account, error) {
 }
 
 // buildOTPAuthURI constructs a canonical otpauth:// URI from an Account.
-//
-// If showSecret is false the secret parameter is replaced with "[REDACTED]"
-// so the URI can be printed safely without exposing the raw key.
-// Non-default field values (algorithm=SHA1, digits=6, period=30) are omitted
-// to keep the URI clean and interoperable.
 func buildOTPAuthURI(a Account, showSecret bool) string {
 	otpType := strings.ToLower(a.Type)
 	if otpType == "" {
@@ -744,8 +765,6 @@ func main() {
 }
 
 // cmdInit creates a new encrypted vault.
-//
-// Fail-safe: refuses to overwrite an existing vault (§2.2).
 func cmdInit(args []string) int {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	itersFlag := fs.Int("iterations", vaultKDFIterations, "PBKDF2 iterations (default 600,000 per OWASP)")
@@ -761,6 +780,13 @@ func cmdInit(args []string) int {
 		fmt.Fprintf(os.Stderr, "error: iterations must be between 1,000 and 10,000,000 (got %d)\n", *itersFlag)
 		return exitUsage
 	}
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	if _, err := os.Stat(globalVaultPath); err == nil {
 		fmt.Fprintf(os.Stderr, "error: vault already exists at %s\n", globalVaultPath)
@@ -817,11 +843,6 @@ func cmdInit(args []string) int {
 }
 
 // cmdAdd adds a new account to the vault.
-//
-// Secret/URI input precedence: --uri-flag > --uri-file > --secret-flag >
-// --secret-file > interactive stdin.
-// Interactive stdin is the most secure path (secret never appears in shell
-// history or 'ps' output) and is the recommended path in the README.
 func cmdAdd(args []string) int {
 	fs := flag.NewFlagSet("add", flag.ContinueOnError)
 	secretFlag := fs.String("secret", "", "base32 secret (shell-history risk — prefer --secret-file)")
@@ -832,10 +853,6 @@ func cmdAdd(args []string) int {
 		fmt.Fprintln(os.Stderr, "Usage: stdotp add <name> [--secret-file <p>|--uri-file <p>|--secret <b32>|--uri <uri>]")
 	}
 
-	// Pull the account name out of args before flag.Parse so that flags can
-	// appear after the name (e.g. "stdotp add alice --uri ...").
-	// Go's flag package stops at the first non-flag argument, so if <name>
-	// comes first it would prevent --uri etc. from being parsed.
 	var name string
 	var flagArgs []string
 	for i, a := range args {
@@ -847,13 +864,19 @@ func cmdAdd(args []string) int {
 		flagArgs = append(flagArgs, a)
 	}
 	if name == "" {
-		// All args were flags — no positional name provided.
 		fs.Usage()
 		return exitUsage
 	}
 	if err := fs.Parse(flagArgs); err != nil {
 		return exitUsage
 	}
+
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
 
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
@@ -863,7 +886,7 @@ func cmdAdd(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -920,7 +943,6 @@ func cmdAdd(args []string) int {
 		}
 
 	default:
-		// Interactive path: prompt for base32 secret or otpauth:// URI on stdin.
 		fmt.Fprintln(os.Stderr, "Enter base32 secret or otpauth:// URI:")
 		input, readErr := readLine()
 		if readErr != nil || strings.TrimSpace(input) == "" {
@@ -945,7 +967,8 @@ func cmdAdd(args []string) int {
 	}
 
 	data.Accounts = append(data.Accounts, account)
-	if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
+	// 1. Preserve vault's existing custom iterations
+	if err = saveVault(globalVaultPath, data, key, salt, iters); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
 		return exitError
 	}
@@ -955,8 +978,10 @@ func cmdAdd(args []string) int {
 }
 
 // accountFromSecret builds a default TOTP Account from a raw base32 secret.
-// Defaults: algorithm=SHA1, digits=6, period=30 — matching common authenticator apps.
 func accountFromSecret(name, secret string) (Account, error) {
+	secret = strings.ReplaceAll(secret, " ", "")
+	secret = strings.ReplaceAll(secret, "-", "")
+	secret = strings.ReplaceAll(secret, "\t", "")
 	secret = strings.ToUpper(strings.TrimRight(secret, "="))
 	if len(secret) > 2048 {
 		return Account{}, errors.New("secret too long (max 2048 characters)")
@@ -1001,6 +1026,13 @@ func cmdCode(args []string) int {
 		return exitUsage
 	}
 
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1009,7 +1041,7 @@ func cmdCode(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1072,7 +1104,7 @@ func cmdCode(args []string) int {
 				break
 			}
 		}
-		if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
+		if err = saveVault(globalVaultPath, data, key, salt, iters); err != nil {
 			fmt.Fprintf(os.Stderr, "error updating HOTP counter: %v\n", err)
 			return exitError
 		}
@@ -1081,7 +1113,6 @@ func cmdCode(args []string) int {
 	}
 
 	if *asJSON {
-		// Only requested data goes to stdout — prompts/errors go to stderr.
 		fmt.Printf(`{"account":%q,"code":%q,"seconds_remaining":%d}`+"\n", name, otp, secsLeft)
 	} else {
 		if !strings.EqualFold(account.Type, "hotp") {
@@ -1120,6 +1151,13 @@ func cmdVerify(args []string) int {
 	name := nonFlags[0]
 	inputCode := nonFlags[1]
 
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1128,7 +1166,7 @@ func cmdVerify(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1191,7 +1229,11 @@ func cmdVerify(args []string) int {
 					break
 				}
 			}
-			_ = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations)
+			// 2. Never ignore HOTP save errors: fail hard if counter cannot be persisted
+			if err = saveVault(globalVaultPath, data, key, salt, iters); err != nil {
+				fmt.Fprintf(os.Stderr, "error saving updated HOTP counter: %v\n", err)
+				return exitError
+			}
 			if *asJSON {
 				fmt.Printf(`{"account":%q,"valid":true,"type":"hotp","counter":%d}`+"\n", name, matchedCounter)
 			} else {
@@ -1255,6 +1297,13 @@ func cmdChangePassword(args []string) int {
 		return exitUsage
 	}
 
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
 	fmt.Fprint(os.Stderr, "Current master password: ")
 	oldPassword, err := readLine()
 	if err != nil {
@@ -1263,7 +1312,7 @@ func cmdChangePassword(args []string) int {
 	}
 	defer zeroBytes([]byte(oldPassword))
 
-	data, oldKey, _, err := loadVault(globalVaultPath, oldPassword)
+	data, oldKey, _, existingIters, err := loadVault(globalVaultPath, oldPassword)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1294,7 +1343,7 @@ func cmdChangePassword(args []string) int {
 		return exitError
 	}
 
-	newIters := vaultKDFIterations
+	newIters := existingIters
 	if *itersFlag > 0 {
 		newIters = *itersFlag
 	}
@@ -1330,6 +1379,13 @@ func cmdRename(args []string) int {
 	}
 	oldName, newName := args[0], args[1]
 
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1338,7 +1394,7 @@ func cmdRename(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1365,7 +1421,7 @@ func cmdRename(args []string) int {
 	}
 
 	data.Accounts[idx].Name = newName
-	if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
+	if err = saveVault(globalVaultPath, data, key, salt, iters); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
 		return exitError
 	}
@@ -1391,7 +1447,7 @@ func cmdList(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, _, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1465,6 +1521,13 @@ func cmdRemove(args []string) int {
 	}
 	name := fs.Arg(0)
 
+	unlock, lockErr := acquireVaultLock(globalVaultPath)
+	if lockErr != nil {
+		fmt.Fprintf(os.Stderr, "error: %v\n", lockErr)
+		return exitError
+	}
+	defer unlock()
+
 	fmt.Fprint(os.Stderr, "Master password: ")
 	password, err := readLine()
 	if err != nil {
@@ -1473,7 +1536,7 @@ func cmdRemove(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, iters, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1493,7 +1556,7 @@ func cmdRemove(args []string) int {
 	}
 
 	data.Accounts = append(data.Accounts[:idx], data.Accounts[idx+1:]...)
-	if err = saveVault(globalVaultPath, data, key, salt, vaultKDFIterations); err != nil {
+	if err = saveVault(globalVaultPath, data, key, salt, iters); err != nil {
 		fmt.Fprintf(os.Stderr, "error saving vault: %v\n", err)
 		return exitError
 	}
@@ -1509,6 +1572,7 @@ func cmdExport(args []string) int {
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: stdotp export <name> [--show-secret]")
 	}
+
 	var name string
 	var flagArgs []string
 	for i, a := range args {
@@ -1535,7 +1599,7 @@ func cmdExport(args []string) int {
 	}
 	defer zeroBytes([]byte(password))
 
-	data, key, salt, err := loadVault(globalVaultPath, password)
+	data, key, salt, _, err := loadVault(globalVaultPath, password)
 	if err != nil {
 		return vaultErrCode(err)
 	}
@@ -1548,7 +1612,6 @@ func cmdExport(args []string) int {
 		return exitNotFound
 	}
 
-	// Only the URI itself goes to stdout; the password prompt went to stderr.
 	fmt.Println(buildOTPAuthURI(account, *showSecret))
 	return exitOK
 }
@@ -1626,16 +1689,18 @@ func cmdSelfTest() int {
 	}
 	fmt.Println("[PASS] RFC 7914 §12 PBKDF2-HMAC-SHA256 test vectors")
 
-	// 4. AES-256-GCM Round-trip
+	// 4. AES-256-GCM Round-trip with AAD
 	salt := []byte("1234567890123456")
 	k := deriveKey("selftestpass", salt, 1000)
 	vd := VaultData{Accounts: []Account{{ID: uuid.New().String(), Name: "test", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
-	nonce, ct, err := encryptVault(vd, k)
+	saltB64 := base64.StdEncoding.EncodeToString(salt)
+	aad := vaultAAD(vaultFormatVersion, vaultKDF, 1000, saltB64)
+	nonce, ct, err := encryptVault(vd, k, aad)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "[FAIL] encryptVault: %v\n", err)
 		return exitError
 	}
-	dec, err := decryptVault(nonce, ct, k)
+	dec, err := decryptVault(nonce, ct, k, aad)
 	if err != nil || len(dec.Accounts) != 1 || dec.Accounts[0].Name != "test" {
 		fmt.Fprintln(os.Stderr, "[FAIL] decryptVault mismatch")
 		return exitError
@@ -1664,11 +1729,6 @@ func cmdSelfTest() int {
 }
 
 // readLine reads one line from the shared stdin reader.
-//
-// Note: input is NOT masked — characters echo as typed. This is a documented
-// limitation: golang.org/x/term provides masking but is not part of the Go
-// standard library. The threat model section of the README covers this
-// explicitly rather than staying silent on it.
 func readLine() (string, error) {
 	line, err := stdinReader.ReadString('\n')
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -1687,8 +1747,7 @@ func findAccount(data VaultData, name string) (Account, bool) {
 	return Account{}, false
 }
 
-// vaultErrCode maps vault load errors to the correct CLI exit code,
-// prints an appropriate message to stderr, and returns the exit code.
+// vaultErrCode maps vault load errors to the correct CLI exit code.
 func vaultErrCode(err error) int {
 	switch {
 	case errors.Is(err, errVaultMissing):

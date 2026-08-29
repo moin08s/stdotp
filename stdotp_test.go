@@ -2,8 +2,11 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -171,6 +174,8 @@ func TestVaultEncryptDecrypt(t *testing.T) {
 	const iters = 1000
 	salt := []byte("testsalt12345678") // exactly 16 bytes
 	key := pbkdf2([]byte("hunter2"), salt, iters, 32)
+	saltB64 := base64.StdEncoding.EncodeToString(salt)
+	aad := vaultAAD(vaultFormatVersion, vaultKDF, iters, saltB64)
 
 	original := VaultData{
 		Accounts: []Account{
@@ -186,7 +191,7 @@ func TestVaultEncryptDecrypt(t *testing.T) {
 		},
 	}
 
-	nonce, ciphertext, err := encryptVault(original, key)
+	nonce, ciphertext, err := encryptVault(original, key, aad)
 	if err != nil {
 		t.Fatalf("encryptVault: %v", err)
 	}
@@ -197,7 +202,7 @@ func TestVaultEncryptDecrypt(t *testing.T) {
 	}
 
 	// Two separate Seal calls must produce different ciphertexts (fresh nonce).
-	nonce2, ciphertext2, err := encryptVault(original, key)
+	nonce2, ciphertext2, err := encryptVault(original, key, aad)
 	if err != nil {
 		t.Fatalf("encryptVault (second call): %v", err)
 	}
@@ -209,7 +214,7 @@ func TestVaultEncryptDecrypt(t *testing.T) {
 		t.Error("ciphertexts must differ when nonces differ")
 	}
 
-	decrypted, err := decryptVault(nonce, ciphertext, key)
+	decrypted, err := decryptVault(nonce, ciphertext, key, aad)
 	if err != nil {
 		t.Fatalf("decryptVault: %v", err)
 	}
@@ -228,11 +233,13 @@ func TestVaultEncryptDecrypt(t *testing.T) {
 func TestVaultTamperedCiphertext(t *testing.T) {
 	salt := []byte("testsalt12345678")
 	key := pbkdf2([]byte("password"), salt, 1000, 32)
+	saltB64 := base64.StdEncoding.EncodeToString(salt)
+	aad := vaultAAD(vaultFormatVersion, vaultKDF, 1000, saltB64)
 	data := VaultData{Accounts: []Account{
 		{Name: "x", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"},
 	}}
 
-	nonce, ciphertext, err := encryptVault(data, key)
+	nonce, ciphertext, err := encryptVault(data, key, aad)
 	if err != nil {
 		t.Fatalf("encryptVault: %v", err)
 	}
@@ -242,7 +249,7 @@ func TestVaultTamperedCiphertext(t *testing.T) {
 	copy(tampered, ciphertext)
 	tampered[0] ^= 0xFF
 
-	_, err = decryptVault(nonce, tampered, key)
+	_, err = decryptVault(nonce, tampered, key, aad)
 	if err == nil {
 		t.Fatal("expected GCM authentication failure for tampered ciphertext, got nil")
 	}
@@ -253,16 +260,18 @@ func TestVaultWrongKey(t *testing.T) {
 	salt := []byte("testsalt12345678")
 	correctKey := pbkdf2([]byte("correct"), salt, 1000, 32)
 	wrongKey := pbkdf2([]byte("wrong"), salt, 1000, 32)
+	saltB64 := base64.StdEncoding.EncodeToString(salt)
+	aad := vaultAAD(vaultFormatVersion, vaultKDF, 1000, saltB64)
 
 	data := VaultData{Accounts: []Account{
 		{Name: "x", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"},
 	}}
-	nonce, ciphertext, err := encryptVault(data, correctKey)
+	nonce, ciphertext, err := encryptVault(data, correctKey, aad)
 	if err != nil {
 		t.Fatalf("encryptVault: %v", err)
 	}
 
-	_, err = decryptVault(nonce, ciphertext, wrongKey)
+	_, err = decryptVault(nonce, ciphertext, wrongKey, aad)
 	if err == nil {
 		t.Fatal("expected GCM failure for wrong key, got nil")
 	}
@@ -285,9 +294,12 @@ func TestSaveLoadVault(t *testing.T) {
 	}
 
 	// loadVault reads the iteration count from the file itself.
-	loaded, _, _, err := loadVault(path, "testpass")
+	loaded, _, _, loadedIters, err := loadVault(path, "testpass")
 	if err != nil {
 		t.Fatalf("loadVault: %v", err)
+	}
+	if loadedIters != iters {
+		t.Errorf("loaded iterations = %d, want %d", loadedIters, iters)
 	}
 	if len(loaded.Accounts) != 1 || loaded.Accounts[0].Name != "acme" {
 		t.Errorf("loaded accounts: %+v", loaded.Accounts)
@@ -307,7 +319,7 @@ func TestLoadVault_WrongPassword(t *testing.T) {
 		t.Fatalf("saveVault: %v", err)
 	}
 
-	_, _, _, err := loadVault(path, "wrong")
+	_, _, _, _, err := loadVault(path, "wrong")
 	if !errors.Is(err, errWrongPassword) {
 		t.Errorf("got %v, want errWrongPassword", err)
 	}
@@ -315,7 +327,7 @@ func TestLoadVault_WrongPassword(t *testing.T) {
 
 // TestLoadVault_Missing verifies exit code 5's sentinel error.
 func TestLoadVault_Missing(t *testing.T) {
-	_, _, _, err := loadVault("/no/such/vault.json", "password")
+	_, _, _, _, err := loadVault("/no/such/vault.json", "password")
 	if !errors.Is(err, errVaultMissing) {
 		t.Errorf("got %v, want errVaultMissing", err)
 	}
@@ -1121,7 +1133,10 @@ func BenchmarkPBKDF2_100k(b *testing.B) {
 }
 
 func BenchmarkVaultEncryptDecrypt(b *testing.B) {
-	key := deriveKey("testpass", []byte("1234567890123456"), 1000)
+	salt := []byte("1234567890123456")
+	key := deriveKey("testpass", salt, 1000)
+	saltB64 := base64.StdEncoding.EncodeToString(salt)
+	aad := vaultAAD(vaultFormatVersion, vaultKDF, 1000, saltB64)
 	data := VaultData{
 		Accounts: []Account{
 			{Name: "github", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"},
@@ -1131,13 +1146,273 @@ func BenchmarkVaultEncryptDecrypt(b *testing.B) {
 	b.ResetTimer()
 	b.ReportAllocs()
 	for i := 0; i < b.N; i++ {
-		nonce, ct, err := encryptVault(data, key)
+		nonce, ct, err := encryptVault(data, key, aad)
 		if err != nil {
 			b.Fatal(err)
 		}
-		_, err = decryptVault(nonce, ct, key)
+		_, err = decryptVault(nonce, ct, key, aad)
 		if err != nil {
 			b.Fatal(err)
+		}
+	}
+}
+
+// TestCLI_CustomIterationsPreservedAcrossMutations verifies that initializing a vault with
+// custom iterations (e.g. 5,000) preserves that exact iteration count across add, rename,
+// remove, and HOTP code generation operations.
+func TestCLI_CustomIterationsPreservedAcrossMutations(t *testing.T) {
+	vaultPath := filepath.Join(t.TempDir(), "vault.json")
+	vf := "--vault=" + vaultPath
+	pass := "pass\n"
+
+	// 1. Init with 5,000 iterations
+	runCLI(t, pass+pass, vf, "init", "--iterations=5000")
+
+	checkIters := func(stage string) {
+		t.Helper()
+		raw, err := os.ReadFile(vaultPath)
+		if err != nil {
+			t.Fatalf("[%s] read vault: %v", stage, err)
+		}
+		var f VaultFile
+		if err := json.Unmarshal(raw, &f); err != nil {
+			t.Fatalf("[%s] parse vault: %v", stage, err)
+		}
+		if f.KDFIterations != 5000 {
+			t.Errorf("[%s] KDFIterations = %d, want 5000", stage, f.KDFIterations)
+		}
+	}
+
+	checkIters("after init")
+
+	// 2. Add account
+	runCLI(t, pass+"JBSWY3DPEHPK3PXP\n", vf, "add", "acc1")
+	checkIters("after add")
+
+	// 3. Rename account
+	runCLI(t, pass, vf, "rename", "acc1", "acc2")
+	checkIters("after rename")
+
+	// 4. Add HOTP account and generate code (mutates counter on disk)
+	runCLI(t, pass, vf, "add", "hotp_acc", "--uri=otpauth://hotp/hotp_acc?secret=JBSWY3DPEHPK3PXP&counter=0")
+	checkIters("after add HOTP")
+
+	runCLI(t, pass, vf, "code", "hotp_acc")
+	checkIters("after code HOTP")
+
+	// 5. Remove account
+	runCLI(t, pass, vf, "remove", "acc2")
+	checkIters("after remove")
+}
+
+// TestCLI_VerifyHOTP_SaveFailure verifies that if saving the updated HOTP counter fails,
+// verify returns exitError and does NOT claim the code was valid.
+func TestCLI_VerifyHOTP_SaveFailure(t *testing.T) {
+	dir := t.TempDir()
+	vaultPath := filepath.Join(dir, "vault.json")
+	vf := "--vault=" + vaultPath
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init", "--iterations=1000")
+	runCLI(t, pass, vf, "add", "h1", "--uri=otpauth://hotp/h1?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=0")
+
+	// Make the vault file read-only so saving fails
+	if err := os.Chmod(vaultPath, 0400); err != nil {
+		t.Skip("skipping read-only file test on unsupported platform")
+	}
+	defer os.Chmod(vaultPath, 0600) // cleanup
+
+	// Counter 0 generates 755224. Verify should try to save counter 1 and fail.
+	out, errOut, code := runCLI(t, pass, vf, "verify", "h1", "755224")
+	if code == exitOK {
+		t.Errorf("expected error when saving counter fails, got code=0 (stdout: %q, stderr: %q)", out, errOut)
+	}
+}
+
+// TestVault_MalformedHeaders tests validation of corrupted or illegal header fields.
+func TestVault_MalformedHeaders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.json")
+
+	validSalt := base64.StdEncoding.EncodeToString([]byte("1234567890123456"))
+	validNonce := base64.StdEncoding.EncodeToString(make([]byte, 12))
+	validCT := base64.StdEncoding.EncodeToString(make([]byte, 32))
+
+	tests := []struct {
+		name string
+		vf   VaultFile
+	}{
+		{
+			name: "bad format version",
+			vf: VaultFile{
+				FormatVersion: 99,
+				KDF:           vaultKDF,
+				KDFIterations: 1000,
+				KDFSalt:       validSalt,
+				Nonce:         validNonce,
+				Ciphertext:    validCT,
+			},
+		},
+		{
+			name: "unsupported KDF",
+			vf: VaultFile{
+				FormatVersion: 1,
+				KDF:           "MD5-CRYPT",
+				KDFIterations: 1000,
+				KDFSalt:       validSalt,
+				Nonce:         validNonce,
+				Ciphertext:    validCT,
+			},
+		},
+		{
+			name: "iterations too low",
+			vf: VaultFile{
+				FormatVersion: 1,
+				KDF:           vaultKDF,
+				KDFIterations: 50,
+				KDFSalt:       validSalt,
+				Nonce:         validNonce,
+				Ciphertext:    validCT,
+			},
+		},
+		{
+			name: "iterations too high",
+			vf: VaultFile{
+				FormatVersion: 1,
+				KDF:           vaultKDF,
+				KDFIterations: 99_000_000,
+				KDFSalt:       validSalt,
+				Nonce:         validNonce,
+				Ciphertext:    validCT,
+			},
+		},
+		{
+			name: "salt too short",
+			vf: VaultFile{
+				FormatVersion: 1,
+				KDF:           vaultKDF,
+				KDFIterations: 1000,
+				KDFSalt:       base64.StdEncoding.EncodeToString([]byte("short")),
+				Nonce:         validNonce,
+				Ciphertext:    validCT,
+			},
+		},
+		{
+			name: "nonce wrong size",
+			vf: VaultFile{
+				FormatVersion: 1,
+				KDF:           vaultKDF,
+				KDFIterations: 1000,
+				KDFSalt:       validSalt,
+				Nonce:         base64.StdEncoding.EncodeToString([]byte("1234")),
+				Ciphertext:    validCT,
+			},
+		},
+		{
+			name: "ciphertext too short",
+			vf: VaultFile{
+				FormatVersion: 1,
+				KDF:           vaultKDF,
+				KDFIterations: 1000,
+				KDFSalt:       validSalt,
+				Nonce:         validNonce,
+				Ciphertext:    base64.StdEncoding.EncodeToString([]byte("123")),
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, err := json.Marshal(tc.vf)
+			if err != nil {
+				t.Fatalf("marshal: %v", err)
+			}
+			if err := os.WriteFile(path, raw, 0600); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			_, _, _, _, err = loadVault(path, "testpass")
+			if err == nil {
+				t.Fatalf("[%s] expected loadVault error for malformed header, got nil", tc.name)
+			}
+		})
+	}
+}
+
+// TestVault_AADHeaderTampering verifies that AES-GCM Additional Authenticated Data (AAD)
+// cryptographically detects and rejects tampering of the JSON envelope headers (e.g. kdf_iterations or salt).
+func TestVault_AADHeaderTampering(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "vault.json")
+	const iters = 1000
+	salt := []byte("1234567890123456")
+	key := deriveKey("testpass", salt, iters)
+	data := VaultData{Accounts: []Account{{Name: "acc1", Secret: "JBSWY3DPEHPK3PXP", Algorithm: "SHA1", Digits: 6, Period: 30, Type: "totp"}}}
+
+	if err := saveVault(path, data, key, salt, iters); err != nil {
+		t.Fatalf("saveVault: %v", err)
+	}
+
+	// Read valid vault file
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("readFile: %v", err)
+	}
+	var vf VaultFile
+	if err := json.Unmarshal(raw, &vf); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+
+	// Tamper with kdf_iterations in JSON header (e.g. change 1000 to 2000)
+	vf.KDFIterations = 2000
+	tamperedJSON, _ := json.Marshal(vf)
+	if err := os.WriteFile(path, tamperedJSON, 0600); err != nil {
+		t.Fatalf("writeFile: %v", err)
+	}
+
+	// Attempting to load must fail GCM authentication (errWrongPassword)
+	_, _, _, _, err = loadVault(path, "testpass")
+	if !errors.Is(err, errWrongPassword) {
+		t.Errorf("expected errWrongPassword when header AAD is tampered, got: %v", err)
+	}
+}
+
+// TestVault_ConcurrentHOTPAccess verifies that multiple concurrent processes/goroutines
+// generating HOTP codes acquire the lock cleanly and never produce duplicate codes.
+func TestVault_ConcurrentHOTPAccess(t *testing.T) {
+	vaultPath := filepath.Join(t.TempDir(), "vault.json")
+	vf := "--vault=" + vaultPath
+	pass := "pass\n"
+
+	runCLI(t, pass+pass, vf, "init", "--iterations=1000")
+	runCLI(t, pass, vf, "add", "hotp_conc", "--uri=otpauth://hotp/hotp_conc?secret=GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ&counter=0")
+
+	const n = 5
+	results := make(chan string, n)
+	errorsChan := make(chan error, n)
+
+	for i := 0; i < n; i++ {
+		go func() {
+			out, _, code := runCLI(t, pass, vf, "code", "hotp_conc")
+			if code != exitOK {
+				errorsChan <- fmt.Errorf("exit code %d: %s", code, out)
+				return
+			}
+			results <- strings.TrimSpace(out)
+		}()
+	}
+
+	seen := make(map[string]bool)
+	for i := 0; i < n; i++ {
+		select {
+		case err := <-errorsChan:
+			t.Fatalf("concurrent HOTP code generation failed: %v", err)
+		case token := <-results:
+			if seen[token] {
+				t.Fatalf("duplicate HOTP token generated under concurrency: %s", token)
+			}
+			seen[token] = true
+		case <-time.After(10 * time.Second):
+			t.Fatal("timed out waiting for concurrent HOTP execution")
 		}
 	}
 }
