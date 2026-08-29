@@ -7,20 +7,20 @@ Every cryptographic choice is documented and defensible; every external dependen
 
 ---
 
-## Track E Compliance & Bonus Targets at a Glance
+## Security & Architecture Highlights
 
-| Hackathon Requirement / Bonus | Where & How `stdotp` Delivers It | Verification Status |
+| Requirement / Standard | Where & How `stdotp` Delivers It | Status |
 |---|---|:---:|
 | **Zero Runtime Dependencies** | Empty `require` block in `go.mod` on Go 1.27. Builds with `GOPROXY=off`. | ✅ **Verified** |
 | **Never Rolls Its Own Cipher** | Composes `crypto/aes` + `crypto/cipher` (AES-256-GCM with AAD) and `crypto/hmac` (PBKDF2 per RFC 2898 §5.2). | ✅ **Verified** |
-| **Handles Key Material Defensibly** | AES-256-GCM with AAD at rest, 12-byte CSPRNG fresh nonces, configurable PBKDF2 iterations (default 600,000 per OWASP 2026), best-effort memory zeroing. | ✅ **Verified** |
-| **Fails Safe (§2.2)** | Auth tag/AAD failure → exit 3 (no partial plaintext); corrupt/invalid header → exit 1; missing vault → exit 5. | ✅ **Verified** |
+| **Defensible Key Material Management** | AES-256-GCM with AAD at rest, 12-byte CSPRNG fresh nonces, configurable PBKDF2 iterations (default 600,000 per OWASP 2026), best-effort memory zeroing. | ✅ **Verified** |
+| **Fail-Safe Operation (§2.2)** | Auth tag/AAD failure → exit 3 (no partial plaintext); corrupt/invalid header → exit 1; missing vault → exit 5. | ✅ **Verified** |
 | **Vault Locking & Durability** | Lockfile (`.lock`) concurrency control $\rightarrow$ temp file (`.stdotp-UUID-*.tmp`) $\rightarrow$ `fsync` $\rightarrow$ `chmod 0600` $\rightarrow$ `os.Rename` $\rightarrow$ dir sync. | ✅ **Verified** |
 | **Air-Gapped Operation** | Zero network calls; `net/http` is completely absent from the runtime. | ✅ **Verified** |
-| **Single File Bonus (+5)** | Core implementation in `stdotp.go` + built-in `stdotp self-test` for standalone single-binary verification. | 🎯 **Targeted (+5)** |
-| **Reproducible Build (+5)** | Bit-for-bit identical SHA-256 hashes across independent builds (`-trimpath -ldflags="-buildid="`). | 🎯 **Targeted (+5)** |
-| **Package Killer Bonus (+3)** | Cleanly eliminates `github.com/pquerna/otp` (15M+ downloads) and `github.com/google/uuid` (80M+ weekly downloads via Go 1.27 stdlib `uuid`). | 🎯 **Targeted (+3)** |
-| **STDLIB Log Bonus (+3)** | Full 15-entry substitution table with design rationales in `STDLIB.md` and embedded below. | 🎯 **Targeted (+3)** |
+| **Standalone Self-Test** | Core implementation in `stdotp.go` + built-in `stdotp self-test` for standalone single-binary verification. | ✅ **Verified** |
+| **Reproducible Build** | Bit-for-bit identical SHA-256 hashes across independent builds (`-trimpath -ldflags="-buildid="`). | ✅ **Verified** |
+| **Ecosystem Package Elimination** | Cleanly eliminates `github.com/pquerna/otp` and `github.com/google/uuid` via Go 1.27 standard library. | ✅ **Verified** |
+| **Standard Library Log** | Full 15-entry substitution table with technical rationales in `STDLIB.md` and embedded below. | ✅ **Verified** |
 
 ---
 
@@ -40,7 +40,7 @@ Every cryptographic choice is documented and defensible; every external dependen
 9. [Performance Benchmarks & PBKDF2 Zero-Allocation Optimization](#performance-benchmarks--pbkdf2-zero-allocation-optimization)
 10. [Full 15-Package Substitution Matrix](#full-15-package-substitution-matrix)
 11. [Reproducible Build & Dependency Proof](#reproducible-build--dependency-proof)
-12. [Demo Script, Side-Quest & License](#demo-script-side-quest--license)
+12. [Documentation & License](#documentation--license)
 
 ---
 
@@ -518,9 +518,9 @@ CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-buildid=" -o stdotp 
 
 ---
 
-## Demo Script, Side-Quest & License
+## Documentation & License
 
-- **5-Minute Video Recording Walkthrough**: See [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md).
-- **Video Production Guide**: See [`VIDEO_PRODUCTION_GUIDE.md`](VIDEO_PRODUCTION_GUIDE.md).
-- **Technical Deep-Dive Article**: See [`WRITEUP.md`](WRITEUP.md) for the $300 Hackathon Write-Up Side Quest.
+- **Technical Architecture & Deep Dive**: See [`WRITEUP.md`](WRITEUP.md).
+- **Standard Library Substitutions (15 Packages)**: See [`STDLIB.md`](STDLIB.md).
+- **Verifiable Dependency & Compilation Proof**: See [`deps-proof.txt`](deps-proof.txt).
 - **License**: MIT License — see [LICENSE](LICENSE).

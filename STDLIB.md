@@ -2,8 +2,8 @@
 
 Development-only dependencies: none.
 
-This file records every third-party package that `stdotp` replaces with a Go standard
-library equivalent, satisfying the **STDLIB Log bonus (+3)** and the **Package Killer bonus (+3)**.
+This document details every third-party ecosystem package that `stdotp` replaces with a Go standard
+library equivalent, along with technical design rationales for each architectural choice.
 
 `go vet` and `gofmt` are part of the Go toolchain itself, not third-party tools.
 

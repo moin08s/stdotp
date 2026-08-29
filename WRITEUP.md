@@ -1,6 +1,6 @@
 # Zero-Dependency 2FA: Rebuilding HOTP, TOTP, and Encrypted Vaults with Pure Go 1.27
 
-*By Moin (@moin08s) · Submission for Zero Dependency Hackathon 2026 (Track E & Write-Up Side Quest)*
+*By Moin (@moin08s) · Zero Dependency Hackathon 2026 (Track E: Security & Crypto Utilities)*
 
 ---
 
