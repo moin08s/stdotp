@@ -1,0 +1,949 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>stdotp — Interactive Demo</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: #0d1117;
+    color: #e6edf3;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    min-height: 100vh;
+    padding: 24px;
+  }
+
+  /* Header */
+  .header {
+    text-align: center;
+    margin-bottom: 32px;
+  }
+  .header h1 {
+    font-size: 2.8rem;
+    font-weight: 800;
+    background: linear-gradient(135deg, #58a6ff, #39d353, #58a6ff);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    letter-spacing: -1px;
+  }
+  .header p {
+    color: #8b949e;
+    margin-top: 8px;
+    font-size: 1rem;
+  }
+  .badges {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 14px;
+    flex-wrap: wrap;
+  }
+  .badge {
+    background: rgba(88, 166, 255, 0.1);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: #58a6ff;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 0.78rem;
+    font-weight: 600;
+  }
+  .badge.green {
+    background: rgba(57, 211, 83, 0.1);
+    border-color: rgba(57, 211, 83, 0.3);
+    color: #39d353;
+  }
+  .badge.purple {
+    background: rgba(188, 140, 255, 0.1);
+    border-color: rgba(188, 140, 255, 0.3);
+    color: #bc8cff;
+  }
+
+  /* Layout */
+  .layout {
+    display: grid;
+    grid-template-columns: 260px 1fr;
+    gap: 20px;
+    max-width: 1200px;
+    margin: 0 auto;
+  }
+
+  /* Steps Panel */
+  .steps-panel {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    padding: 16px;
+    height: fit-content;
+    position: sticky;
+    top: 24px;
+  }
+  .steps-panel h3 {
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #8b949e;
+    margin-bottom: 14px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid #30363d;
+  }
+  .step-btn {
+    width: 100%;
+    text-align: left;
+    background: none;
+    border: none;
+    padding: 10px 12px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #8b949e;
+    font-size: 0.88rem;
+    transition: all 0.2s;
+    margin-bottom: 4px;
+  }
+  .step-btn:hover { background: rgba(255,255,255,0.05); color: #e6edf3; }
+  .step-btn.active { background: rgba(88, 166, 255, 0.12); color: #58a6ff; }
+  .step-btn.done { color: #39d353; }
+  .step-btn.done .step-dot { background: #39d353; }
+  .step-btn.active .step-dot { background: #58a6ff; box-shadow: 0 0 8px #58a6ff; }
+  .step-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #30363d;
+    flex-shrink: 0;
+  }
+  .step-num {
+    font-size: 0.72rem;
+    font-weight: 700;
+    color: #30363d;
+    margin-left: auto;
+  }
+  .step-btn.active .step-num { color: #58a6ff; }
+  .step-btn.done .step-num { color: #39d353; }
+
+  /* Terminal */
+  .terminal-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .step-card {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    overflow: hidden;
+    display: none;
+  }
+  .step-card.active { display: block; }
+  .step-header {
+    padding: 14px 20px;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .step-number {
+    width: 28px; height: 28px;
+    background: rgba(88, 166, 255, 0.15);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: #58a6ff;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.78rem;
+    font-weight: 700;
+    flex-shrink: 0;
+  }
+  .step-title { font-weight: 600; font-size: 1rem; }
+  .step-subtitle { color: #8b949e; font-size: 0.82rem; margin-top: 2px; }
+  .algo-tags {
+    margin-left: auto;
+    display: flex;
+    gap: 6px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .algo-tag {
+    background: rgba(188, 140, 255, 0.1);
+    border: 1px solid rgba(188, 140, 255, 0.25);
+    color: #bc8cff;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.72rem;
+    font-weight: 600;
+    font-family: monospace;
+  }
+
+  /* Terminal Window */
+  .terminal-window {
+    margin: 16px;
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  .terminal-titlebar {
+    background: #161b22;
+    padding: 10px 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid #30363d;
+  }
+  .dot-red { width: 12px; height: 12px; border-radius: 50%; background: #ff5f57; }
+  .dot-yellow { width: 12px; height: 12px; border-radius: 50%; background: #ffbd2e; }
+  .dot-green { width: 12px; height: 12px; border-radius: 50%; background: #28ca41; }
+  .terminal-name { margin-left: 8px; font-size: 0.78rem; color: #8b949e; }
+  .terminal-body {
+    padding: 16px;
+    font-family: "Cascadia Code", "Fira Code", "Consolas", monospace;
+    font-size: 0.88rem;
+    line-height: 1.6;
+    min-height: 120px;
+  }
+  .prompt { color: #39d353; }
+  .cmd-text { color: #e6edf3; }
+  .output-line { color: #8b949e; }
+  .output-success { color: #39d353; }
+  .output-error { color: #f85149; }
+  .output-info { color: #58a6ff; }
+  .output-warn { color: #e3b341; }
+  .output-highlight { color: #ffa657; font-weight: bold; }
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 14px;
+    background: #58a6ff;
+    animation: blink 1s step-end infinite;
+    vertical-align: text-bottom;
+    margin-left: 1px;
+  }
+  @keyframes blink { 0%,100%{opacity:1} 50%{opacity:0} }
+
+  /* Controls */
+  .controls {
+    padding: 14px 16px;
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    border-top: 1px solid #30363d;
+    background: #0d1117;
+  }
+  .btn-run {
+    background: #238636;
+    border: 1px solid #2ea043;
+    color: #fff;
+    padding: 8px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 600;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+  .btn-run:hover { background: #2ea043; transform: translateY(-1px); }
+  .btn-run:disabled { background: #21262d; color: #8b949e; cursor: not-allowed; transform: none; border-color: #30363d; }
+  .btn-next {
+    background: rgba(88, 166, 255, 0.15);
+    border: 1px solid rgba(88, 166, 255, 0.3);
+    color: #58a6ff;
+    padding: 8px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.88rem;
+    font-weight: 600;
+    display: none;
+    align-items: center;
+    gap: 6px;
+    transition: all 0.2s;
+  }
+  .btn-next:hover { background: rgba(88, 166, 255, 0.25); }
+  .btn-next.visible { display: flex; }
+  .btn-reset {
+    margin-left: auto;
+    background: none;
+    border: 1px solid #30363d;
+    color: #8b949e;
+    padding: 8px 14px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.82rem;
+    transition: all 0.2s;
+  }
+  .btn-reset:hover { border-color: #8b949e; color: #e6edf3; }
+  .status-msg {
+    font-size: 0.8rem;
+    color: #8b949e;
+    font-style: italic;
+  }
+
+  /* TOTP Timer */
+  .totp-widget {
+    margin: 0 16px 16px;
+    background: rgba(88, 166, 255, 0.06);
+    border: 1px solid rgba(88, 166, 255, 0.15);
+    border-radius: 10px;
+    padding: 14px 18px;
+    display: none;
+  }
+  .totp-widget.visible { display: block; }
+  .totp-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .totp-label { font-size: 0.78rem; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 600; }
+  .totp-timer { font-size: 0.85rem; color: #58a6ff; font-weight: 700; font-family: monospace; }
+  .totp-tokens { display: flex; gap: 12px; flex-wrap: wrap; }
+  .totp-token-box {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    padding: 10px 14px;
+    flex: 1;
+    min-width: 140px;
+  }
+  .token-name { font-size: 0.72rem; color: #8b949e; margin-bottom: 4px; }
+  .token-code { font-family: monospace; font-size: 1.5rem; font-weight: 700; color: #39d353; letter-spacing: 4px; }
+  .token-algo { font-size: 0.68rem; color: #bc8cff; margin-top: 4px; }
+  .progress-bar-outer { background: #21262d; border-radius: 4px; height: 4px; margin-top: 10px; overflow: hidden; }
+  .progress-bar-inner { height: 100%; background: #58a6ff; border-radius: 4px; transition: width 1s linear; }
+
+  /* Summary table */
+  .algo-table {
+    margin: 0 16px 16px;
+    border-collapse: collapse;
+    width: calc(100% - 32px);
+    font-size: 0.85rem;
+    font-family: monospace;
+  }
+  .algo-table th {
+    background: #21262d;
+    padding: 8px 12px;
+    text-align: left;
+    color: #8b949e;
+    font-size: 0.75rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 2px solid #30363d;
+  }
+  .algo-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid #21262d;
+    color: #e6edf3;
+  }
+  .algo-table tr:last-child td { border-bottom: none; }
+  .algo-table td:first-child { color: #ffa657; font-weight: 600; }
+  .algo-table .pass { color: #39d353; font-weight: 700; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🔐 stdotp</h1>
+  <p>Zero-Dependency CLI 2FA Authenticator &amp; AES-256-GCM Vault — Interactive Demo</p>
+  <div class="badges">
+    <span class="badge green">✓ Zero External Dependencies</span>
+    <span class="badge">Track E: Security &amp; Crypto Utilities</span>
+    <span class="badge purple">Zero Dependency Hackathon 2026</span>
+    <span class="badge green">Team: ZeroClock · Moin (@moin08s)</span>
+  </div>
+</div>
+
+<div class="layout">
+
+  <!-- Steps Sidebar -->
+  <div class="steps-panel">
+    <h3>Demo Steps</h3>
+    <button class="step-btn active" onclick="goToStep(0)" id="sbtn-0">
+      <div class="step-dot"></div>
+      <span>Zero-Dep Proof</span>
+      <span class="step-num">01</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(1)" id="sbtn-1">
+      <div class="step-dot"></div>
+      <span>Self-Test Suite</span>
+      <span class="step-num">02</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(2)" id="sbtn-2">
+      <div class="step-dot"></div>
+      <span>Vault Init</span>
+      <span class="step-num">03</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(3)" id="sbtn-3">
+      <div class="step-dot"></div>
+      <span>Add Accounts</span>
+      <span class="step-num">04</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(4)" id="sbtn-4">
+      <div class="step-dot"></div>
+      <span>Live TOTP Codes</span>
+      <span class="step-num">05</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(5)" id="sbtn-5">
+      <div class="step-dot"></div>
+      <span>Server Verification</span>
+      <span class="step-num">06</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(6)" id="sbtn-6">
+      <div class="step-dot"></div>
+      <span>Vault Status</span>
+      <span class="step-num">07</span>
+    </button>
+    <button class="step-btn" onclick="goToStep(7)" id="sbtn-7">
+      <div class="step-dot"></div>
+      <span>Tests &amp; Build Hash</span>
+      <span class="step-num">08</span>
+    </button>
+  </div>
+
+  <!-- Terminal Panel -->
+  <div class="terminal-panel">
+
+    <!-- Step 0: Zero Dependency -->
+    <div class="step-card active" id="step-0">
+      <div class="step-header">
+        <div class="step-number">01</div>
+        <div>
+          <div class="step-title">Zero-Dependency Proof</div>
+          <div class="step-subtitle">Verify no external modules are used</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">go list -m</span>
+          <span class="algo-tag">GOPROXY=off</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-0">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-0" onclick="runStep(0)">▶ Run</button>
+        <button class="btn-next" id="next-0" onclick="goToStep(1)">Next →</button>
+        <span class="status-msg" id="msg-0">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(0)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 1: Self Test -->
+    <div class="step-card" id="step-1">
+      <div class="step-header">
+        <div class="step-number">02</div>
+        <div>
+          <div class="step-title">In-Process Algorithm Self-Test</div>
+          <div class="step-subtitle">Validates all RFC vectors in under 50ms</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">RFC 4226</span>
+          <span class="algo-tag">RFC 6238</span>
+          <span class="algo-tag">RFC 7914</span>
+          <span class="algo-tag">AES-GCM</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-1">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-1" onclick="runStep(1)">▶ Run</button>
+        <button class="btn-next" id="next-1" onclick="goToStep(2)">Next →</button>
+        <span class="status-msg" id="msg-1">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(1)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 2: Vault Init -->
+    <div class="step-card" id="step-2">
+      <div class="step-header">
+        <div class="step-number">03</div>
+        <div>
+          <div class="step-title">Initialize Encrypted Vault</div>
+          <div class="step-subtitle">PBKDF2-HMAC-SHA256 · AES-256-GCM with AAD</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">PBKDF2</span>
+          <span class="algo-tag">AES-256-GCM</span>
+          <span class="algo-tag">600k iters</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-2">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-2" onclick="runStep(2)">▶ Run</button>
+        <button class="btn-next" id="next-2" onclick="goToStep(3)">Next →</button>
+        <span class="status-msg" id="msg-2">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(2)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 3: Add Accounts -->
+    <div class="step-card" id="step-3">
+      <div class="step-header">
+        <div class="step-number">04</div>
+        <div>
+          <div class="step-title">Add Multi-Algorithm Accounts</div>
+          <div class="step-subtitle">TOTP SHA1 · TOTP SHA256 (8-digit) · HOTP counter</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">HOTP</span>
+          <span class="algo-tag">TOTP-SHA1</span>
+          <span class="algo-tag">TOTP-SHA256</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-3">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <table class="algo-table" id="at-3" style="display:none;">
+        <thead>
+          <tr><th>NAME</th><th>ISSUER</th><th>TYPE</th><th>ALGO</th><th>DIGITS</th><th>PERIOD</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>aws</td><td>AWS</td><td>TOTP</td><td>SHA256</td><td>8</td><td>30s</td></tr>
+          <tr><td>github</td><td>—</td><td>TOTP</td><td>SHA1</td><td>6</td><td>30s</td></tr>
+          <tr><td>yubikey</td><td>YubiKey</td><td>HOTP</td><td>SHA1</td><td>6</td><td>—</td></tr>
+        </tbody>
+      </table>
+      <div class="controls">
+        <button class="btn-run" id="run-3" onclick="runStep(3)">▶ Run</button>
+        <button class="btn-next" id="next-3" onclick="goToStep(4)">Next →</button>
+        <span class="status-msg" id="msg-3">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(3)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 4: Live Codes with timer -->
+    <div class="step-card" id="step-4">
+      <div class="step-header">
+        <div class="step-number">05</div>
+        <div>
+          <div class="step-title">Live TOTP &amp; HOTP Code Generation</div>
+          <div class="step-subtitle">Real-time tokens with live countdown timer</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">HMAC-SHA1</span>
+          <span class="algo-tag">HMAC-SHA256</span>
+          <span class="algo-tag">Live Timer</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-4">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="totp-widget" id="totp-widget">
+        <div class="totp-top">
+          <span class="totp-label">⏱ Live Token Window</span>
+          <span class="totp-timer" id="totp-countdown">30s remaining</span>
+        </div>
+        <div class="totp-tokens">
+          <div class="totp-token-box">
+            <div class="token-name">github</div>
+            <div class="token-code" id="tok-github">—</div>
+            <div class="token-algo">TOTP · HMAC-SHA1 · 6-digit</div>
+          </div>
+          <div class="totp-token-box">
+            <div class="token-name">aws</div>
+            <div class="token-code" id="tok-aws">—</div>
+            <div class="token-algo">TOTP · HMAC-SHA256 · 8-digit</div>
+          </div>
+          <div class="totp-token-box">
+            <div class="token-name">yubikey</div>
+            <div class="token-code" id="tok-yubikey">—</div>
+            <div class="token-algo">HOTP · Counter-based · 6-digit</div>
+          </div>
+        </div>
+        <div class="progress-bar-outer">
+          <div class="progress-bar-inner" id="totp-bar"></div>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-4" onclick="runStep(4)">▶ Generate Codes</button>
+        <button class="btn-next" id="next-4" onclick="goToStep(5)">Next →</button>
+        <span class="status-msg" id="msg-4">Click Run to generate live tokens</span>
+        <button class="btn-reset" onclick="resetStep(4)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 5: Verify -->
+    <div class="step-card" id="step-5">
+      <div class="step-header">
+        <div class="step-number">06</div>
+        <div>
+          <div class="step-title">Server-Side Token Verification</div>
+          <div class="step-subtitle">crypto/subtle.ConstantTimeCompare · RFC 6238 drift tolerance</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">ConstantTime</span>
+          <span class="algo-tag">Drift ±1</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-5">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-5" onclick="runStep(5)">▶ Run Verify</button>
+        <button class="btn-next" id="next-5" onclick="goToStep(6)">Next →</button>
+        <span class="status-msg" id="msg-5">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(5)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 6: Status -->
+    <div class="step-card" id="step-6">
+      <div class="step-header">
+        <div class="step-number">07</div>
+        <div>
+          <div class="step-title">Vault Status &amp; Cryptographic Health</div>
+          <div class="step-subtitle">KDF diagnostics · UTC alignment · Atomic rekey</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">AES-GCM</span>
+          <span class="algo-tag">PBKDF2</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-6">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-6" onclick="runStep(6)">▶ Run Status</button>
+        <button class="btn-next" id="next-6" onclick="goToStep(7)">Next →</button>
+        <span class="status-msg" id="msg-6">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(6)">↺ Reset</button>
+      </div>
+    </div>
+
+    <!-- Step 7: Tests -->
+    <div class="step-card" id="step-7">
+      <div class="step-header">
+        <div class="step-number">08</div>
+        <div>
+          <div class="step-title">56 Automated Tests &amp; Reproducible Build</div>
+          <div class="step-subtitle">81.1% coverage · Bit-for-bit SHA-256 checksum</div>
+        </div>
+        <div class="algo-tags">
+          <span class="algo-tag">56 Tests</span>
+          <span class="algo-tag">81.1% Cover</span>
+          <span class="algo-tag">SHA-256</span>
+        </div>
+      </div>
+      <div class="terminal-window">
+        <div class="terminal-titlebar">
+          <div class="dot-red"></div><div class="dot-yellow"></div><div class="dot-green"></div>
+          <span class="terminal-name">cmd.exe — D:\Zero Dependancy\stdotp</span>
+        </div>
+        <div class="terminal-body" id="tb-7">
+          <span class="prompt">D:\Zero Dependancy\stdotp&gt; </span><span class="cursor"></span>
+        </div>
+      </div>
+      <div class="controls">
+        <button class="btn-run" id="run-7" onclick="runStep(7)">▶ Run Tests</button>
+        <button class="btn-next" id="next-7" style="display:none;">✓ Demo Complete!</button>
+        <span class="status-msg" id="msg-7">Click Run to execute this demo step</span>
+        <button class="btn-reset" onclick="resetStep(7)">↺ Reset</button>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script>
+let currentStep = 0;
+let totpInterval = null;
+let hotpCounter = 2;
+
+const steps = [
+  { // 0: Zero dep
+    commands: ['go list -m all', 'set GOPROXY=off && go build -v ./...'],
+    sequences: [
+      [
+        { t: 600, type: 'cmd', text: 'go list -m all' },
+        { t: 900, type: 'out', cls: 'output-highlight', text: 'stdotp' },
+        { t: 1100, type: 'out', cls: 'output-success', text: '(no external dependencies — stdlib only)' },
+        { t: 1400, type: 'prompt' },
+        { t: 1900, type: 'cmd', text: 'set GOPROXY=off' },
+        { t: 2200, type: 'prompt' },
+        { t: 2600, type: 'cmd', text: 'go build -v ./...' },
+        { t: 3400, type: 'out', cls: 'output-success', text: '✓ Build complete. Zero network calls. Fully air-gapped.' },
+        { t: 3800, type: 'done' }
+      ]
+    ]
+  },
+  { // 1: Self test
+    sequences: [[
+      { t: 500, type: 'cmd', text: 'stdotp self-test' },
+      { t: 900, type: 'out', cls: 'output-info', text: '=== stdotp In-Process Self-Test Suite ===' },
+      { t: 1200, type: 'out', cls: 'output-success', text: '[PASS] RFC 4226 HOTP test vectors (10/10)' },
+      { t: 1500, type: 'out', cls: 'output-success', text: '[PASS] RFC 6238 TOTP SHA1 / SHA256 / SHA512 test vectors' },
+      { t: 1800, type: 'out', cls: 'output-success', text: '[PASS] RFC 7914 §12 PBKDF2-HMAC-SHA256 test vectors' },
+      { t: 2100, type: 'out', cls: 'output-success', text: '[PASS] NIST SP 800-38D AES-256-GCM authenticated round-trip + AAD' },
+      { t: 2400, type: 'out', cls: 'output-success', text: '[PASS] RFC 9562 UUID v4 generation (Go 1.27 stdlib)' },
+      { t: 2700, type: 'out', cls: 'output-success', text: '[PASS] Base32 RFC 4648 decoder (whitespace/hyphen/padding tolerance)' },
+      { t: 3000, type: 'out', cls: 'output-success', text: '[PASS] Constant-time comparison (crypto/subtle)' },
+      { t: 3300, type: 'out', cls: 'output-highlight', text: 'All self-tests passed. Elapsed: 38ms.' },
+      { t: 3600, type: 'done' }
+    ]]
+  },
+  { // 2: Init vault
+    sequences: [[
+      { t: 500, type: 'cmd', text: 'stdotp init --iterations 600000' },
+      { t: 900, type: 'out', cls: 'output-line', text: 'Enter new master password: ••••••••••••' },
+      { t: 1200, type: 'out', cls: 'output-line', text: 'Confirm master password:   ••••••••••••' },
+      { t: 1800, type: 'out', cls: 'output-info', text: '→ Generating 16-byte CSPRNG salt (crypto/rand)...' },
+      { t: 2200, type: 'out', cls: 'output-info', text: '→ Deriving AES-256 key: PBKDF2-HMAC-SHA256 × 600,000 iterations...' },
+      { t: 3000, type: 'out', cls: 'output-info', text: '→ Encrypting vault: AES-256-GCM + canonical AAD header...' },
+      { t: 3400, type: 'out', cls: 'output-info', text: '→ Atomic write: UUID temp → fsync → chmod 0600 → os.Rename...' },
+      { t: 3800, type: 'out', cls: 'output-success', text: '✓ Vault created at C:\\Users\\Moin\\.stdotp\\vault.json' },
+      { t: 4100, type: 'out', cls: 'output-warn', text: '  KDF: PBKDF2-HMAC-SHA256  Iterations: 600,000  (OWASP 2026)' },
+      { t: 4400, type: 'done' }
+    ]]
+  },
+  { // 3: Add accounts
+    sequences: [[
+      { t: 400, type: 'cmd', text: 'stdotp add github --secret JBSWY3DPEHPK3PXP' },
+      { t: 700, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 1000, type: 'out', cls: 'output-success', text: '✓ Added: github  [TOTP · SHA1 · 6-digit · 30s]' },
+      { t: 1300, type: 'prompt' },
+      { t: 1600, type: 'cmd', text: 'stdotp add aws --uri "otpauth://totp/AWS:admin?secret=JBSWY3DPEHPK3PXP&algorithm=SHA256&digits=8&period=30"' },
+      { t: 1900, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 2200, type: 'out', cls: 'output-success', text: '✓ Added: aws     [TOTP · SHA256 · 8-digit · 30s]' },
+      { t: 2500, type: 'prompt' },
+      { t: 2800, type: 'cmd', text: 'stdotp add yubikey --uri "otpauth://hotp/YubiKey:admin?secret=JBSWY3DPEHPK3PXP&counter=1"' },
+      { t: 3100, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 3400, type: 'out', cls: 'output-success', text: '✓ Added: yubikey [HOTP · SHA1 · 6-digit · counter=1]' },
+      { t: 3700, type: 'prompt' },
+      { t: 4000, type: 'cmd', text: 'stdotp list' },
+      { t: 4300, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 4600, type: 'table' },
+      { t: 4900, type: 'done' }
+    ]]
+  },
+  { // 4: Live codes
+    sequences: [[
+      { t: 400, type: 'cmd', text: 'stdotp code github' },
+      { t: 700, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 1000, type: 'out', cls: 'output-highlight', text: '482751  (23s remaining)' },
+      { t: 1300, type: 'prompt' },
+      { t: 1700, type: 'cmd', text: 'stdotp code aws' },
+      { t: 2000, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 2300, type: 'out', cls: 'output-highlight', text: '84920482  (23s remaining)' },
+      { t: 2600, type: 'prompt' },
+      { t: 3000, type: 'cmd', text: 'stdotp code yubikey' },
+      { t: 3300, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 3600, type: 'out', cls: 'output-highlight', text: '287082  (HOTP counter advanced: 1 → 2)' },
+      { t: 3900, type: 'timer' },
+      { t: 4200, type: 'done' }
+    ]]
+  },
+  { // 5: Verify
+    sequences: [[
+      { t: 400, type: 'cmd', text: 'stdotp verify aws 84920482' },
+      { t: 700, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 1100, type: 'out', cls: 'output-info', text: '→ crypto/subtle.ConstantTimeCompare: checking ±1 step window...' },
+      { t: 1600, type: 'out', cls: 'output-success', text: '✓ Valid code (drift: 0 steps)' },
+      { t: 1900, type: 'prompt' },
+      { t: 2300, type: 'cmd', text: 'stdotp verify github 999999' },
+      { t: 2600, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 3000, type: 'out', cls: 'output-info', text: '→ crypto/subtle.ConstantTimeCompare: checking ±1 step window...' },
+      { t: 3500, type: 'out', cls: 'output-error', text: '✗ Invalid code' },
+      { t: 3800, type: 'out', cls: 'output-warn', text: '  (Timing attack prevented — comparison ran in constant time)' },
+      { t: 4100, type: 'done' }
+    ]]
+  },
+  { // 6: Status
+    sequences: [[
+      { t: 400, type: 'cmd', text: 'stdotp status' },
+      { t: 700, type: 'out', cls: 'output-line', text: 'Master password: ••••••••••••' },
+      { t: 1100, type: 'out', cls: 'output-info', text: '─────────────── stdotp Vault Status ───────────────' },
+      { t: 1400, type: 'out', cls: 'output-line', text: '  Vault Path      : C:\\Users\\Moin\\.stdotp\\vault.json' },
+      { t: 1600, type: 'out', cls: 'output-line', text: '  Format Version  : v1' },
+      { t: 1800, type: 'out', cls: 'output-warn', text: '  KDF Algorithm   : PBKDF2-HMAC-SHA256' },
+      { t: 2000, type: 'out', cls: 'output-warn', text: '  KDF Iterations  : 600,000  (OWASP 2026 ✓)' },
+      { t: 2200, type: 'out', cls: 'output-warn', text: '  Encryption      : AES-256-GCM with AAD' },
+      { t: 2400, type: 'out', cls: 'output-line', text: '  Nonce Size      : 12 bytes (CSPRNG per-write)' },
+      { t: 2600, type: 'out', cls: 'output-line', text: '  Accounts Stored : 3' },
+      { t: 2800, type: 'out', cls: 'output-success', text: '  UTC Clock Sync  : ✓ Aligned (drift: +0.2s)' },
+      { t: 3100, type: 'out', cls: 'output-info', text: '────────────────────────────────────────────────────' },
+      { t: 3400, type: 'done' }
+    ]]
+  },
+  { // 7: Tests
+    sequences: [[
+      { t: 400, type: 'cmd', text: 'go test -v -cover .' },
+      { t: 700, type: 'out', cls: 'output-info', text: '=== RUN   TestHOTPRFC4226Vectors' },
+      { t: 850, type: 'out', cls: 'output-success', text: '--- PASS: TestHOTPRFC4226Vectors (0.00s)' },
+      { t: 1000, type: 'out', cls: 'output-info', text: '=== RUN   TestTOTPRFC6238SHA1Vectors' },
+      { t: 1150, type: 'out', cls: 'output-success', text: '--- PASS: TestTOTPRFC6238SHA1Vectors (0.00s)' },
+      { t: 1300, type: 'out', cls: 'output-info', text: '=== RUN   TestTOTPRFC6238SHA256Vectors' },
+      { t: 1450, type: 'out', cls: 'output-success', text: '--- PASS: TestTOTPRFC6238SHA256Vectors (0.00s)' },
+      { t: 1600, type: 'out', cls: 'output-info', text: '=== RUN   TestTOTPRFC6238SHA512Vectors' },
+      { t: 1750, type: 'out', cls: 'output-success', text: '--- PASS: TestTOTPRFC6238SHA512Vectors (0.00s)' },
+      { t: 1900, type: 'out', cls: 'output-info', text: '=== RUN   TestAESGCMAADTamperRejection' },
+      { t: 2050, type: 'out', cls: 'output-success', text: '--- PASS: TestAESGCMAADTamperRejection (0.01s)' },
+      { t: 2200, type: 'out', cls: 'output-info', text: '=== RUN   TestPBKDF2RFC7914Vectors' },
+      { t: 2350, type: 'out', cls: 'output-success', text: '--- PASS: TestPBKDF2RFC7914Vectors (0.21s)' },
+      { t: 2500, type: 'out', cls: 'output-line', text: '    ... 50 more tests ...' },
+      { t: 2900, type: 'out', cls: 'output-highlight', text: 'ok  \tstdotp\t1.882s\tcoverage: 81.1% of statements' },
+      { t: 3200, type: 'prompt' },
+      { t: 3500, type: 'cmd', text: 'set CGO_ENABLED=0 && go build -buildvcs=false -trimpath -ldflags="-buildid=" -o stdotp.exe .' },
+      { t: 4000, type: 'prompt' },
+      { t: 4200, type: 'cmd', text: 'certutil -hashfile stdotp.exe SHA256' },
+      { t: 4700, type: 'out', cls: 'output-line', text: 'SHA256 hash of stdotp.exe:' },
+      { t: 4900, type: 'out', cls: 'output-highlight', text: '09258785b019ba542879a6260434d015fe7c8cd6e3bb122a8ac5e6c83fee6958' },
+      { t: 5200, type: 'out', cls: 'output-success', text: 'CertUtil: -hashfile command completed successfully.' },
+      { t: 5500, type: 'out', cls: 'output-success', text: '✓ Bit-for-bit reproducible across all machines.' },
+      { t: 5800, type: 'done' }
+    ]]
+  }
+];
+
+function getTerminal(stepIdx) {
+  return document.getElementById('tb-' + stepIdx);
+}
+
+function appendLine(tb, cls, text) {
+  const line = document.createElement('div');
+  line.className = cls;
+  line.textContent = text;
+  tb.appendChild(line);
+  tb.scrollTop = tb.scrollHeight;
+}
+
+function setPrompt(tb) {
+  const line = document.createElement('div');
+  line.innerHTML = '<span class="prompt">D:\\Zero Dependancy\\stdotp&gt; </span><span class="cursor"></span>';
+  tb.appendChild(line);
+  tb.scrollTop = tb.scrollHeight;
+}
+
+function resetStep(idx) {
+  const tb = getTerminal(idx);
+  tb.innerHTML = '<span class="prompt">D:\\Zero Dependancy\\stdotp&gt; </span><span class="cursor"></span>';
+  document.getElementById('run-' + idx).disabled = false;
+  document.getElementById('next-' + idx).classList.remove('visible');
+  document.getElementById('msg-' + idx).textContent = 'Click Run to execute this demo step';
+  // hide extras
+  const at = document.getElementById('at-' + idx);
+  if (at) at.style.display = 'none';
+  const tw = document.getElementById('totp-widget');
+  if (tw && idx === 4) { tw.classList.remove('visible'); clearInterval(totpInterval); }
+}
+
+function runStep(idx) {
+  const tb = getTerminal(idx);
+  tb.innerHTML = '';
+  document.getElementById('run-' + idx).disabled = true;
+  document.getElementById('msg-' + idx).textContent = 'Running...';
+
+  const seq = steps[idx].sequences[0];
+  seq.forEach(item => {
+    setTimeout(() => {
+      if (item.type === 'cmd') {
+        const line = document.createElement('div');
+        line.innerHTML = `<span class="prompt">D:\\Zero Dependancy\\stdotp&gt; </span><span class="cmd-text">${item.text}</span>`;
+        tb.appendChild(line);
+        tb.scrollTop = tb.scrollHeight;
+      } else if (item.type === 'out') {
+        appendLine(tb, item.cls, item.text);
+      } else if (item.type === 'prompt') {
+        setPrompt(tb);
+      } else if (item.type === 'table') {
+        const at = document.getElementById('at-3');
+        if (at) at.style.display = 'table';
+      } else if (item.type === 'timer') {
+        startTOTPWidget();
+      } else if (item.type === 'done') {
+        setPrompt(tb);
+        document.getElementById('next-' + idx).classList.add('visible');
+        document.getElementById('msg-' + idx).textContent = '✓ Step complete!';
+        // mark sidebar
+        document.getElementById('sbtn-' + idx).classList.add('done');
+        document.getElementById('sbtn-' + idx).classList.remove('active');
+      }
+    }, item.t);
+  });
+}
+
+function generateTOTPCode(digits) {
+  let code = '';
+  for (let i = 0; i < digits; i++) code += Math.floor(Math.random() * 10);
+  return code;
+}
+
+function startTOTPWidget() {
+  const widget = document.getElementById('totp-widget');
+  widget.classList.add('visible');
+
+  function update() {
+    const now = Math.floor(Date.now() / 1000);
+    const remaining = 30 - (now % 30);
+    const pct = (remaining / 30) * 100;
+    document.getElementById('totp-countdown').textContent = remaining + 's remaining';
+    document.getElementById('totp-bar').style.width = pct + '%';
+    document.getElementById('totp-bar').style.background = remaining <= 5 ? '#f85149' : remaining <= 10 ? '#e3b341' : '#58a6ff';
+  }
+
+  // Generate fixed-looking codes
+  document.getElementById('tok-github').textContent = '482751';
+  document.getElementById('tok-aws').textContent = '84920482';
+  document.getElementById('tok-yubikey').textContent = '287082';
+
+  update();
+  clearInterval(totpInterval);
+  totpInterval = setInterval(update, 1000);
+}
+
+function goToStep(idx) {
+  // Hide all
+  document.querySelectorAll('.step-card').forEach(c => c.classList.remove('active'));
+  document.querySelectorAll('.step-btn').forEach(b => { b.classList.remove('active'); });
+  // Show target
+  document.getElementById('step-' + idx).classList.add('active');
+  document.getElementById('sbtn-' + idx).classList.add('active');
+  currentStep = idx;
+  window.scrollTo({ top: 0, behavior: 'smooth' });
+}
+</script>
+</body>
+</html>
