@@ -803,7 +803,7 @@ const steps = [
       { t: 2200, type: 'out', cls: 'output-warn', text: '  Encryption      : AES-256-GCM with AAD' },
       { t: 2400, type: 'out', cls: 'output-line', text: '  Nonce Size      : 12 bytes (CSPRNG per-write)' },
       { t: 2600, type: 'out', cls: 'output-line', text: '  Accounts Stored : 3' },
-      { t: 2800, type: 'out', cls: 'output-success', text: '  UTC Clock Sync  : ✓ Aligned (drift: +0.2s)' },
+      { t: 2800, type: 'out', cls: 'output-success', text: '  UTC Alignment   : TOTP uses time.Now().UTC() — no NTP dependency' },
       { t: 3100, type: 'out', cls: 'output-info', text: '────────────────────────────────────────────────────' },
       { t: 3400, type: 'done' }
     ]]
