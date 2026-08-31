@@ -3,6 +3,14 @@
 A zero-dependency CLI TOTP/HOTP authenticator with an **AES-256-GCM encrypted vault**.  
 **Zero Dependency 2026 · Track E: Security & Crypto Utilities · Go 1.27**
 
+[![Live Demo](https://img.shields.io/badge/▶%20Live%20Demo-Click%20to%20Play-brightgreen?style=for-the-badge)](https://moin08s.github.io/stdotp/)
+[![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero-blue?style=for-the-badge)](https://github.com/moin08s/stdotp/blob/main/go.mod)
+[![Go 1.27](https://img.shields.io/badge/Go-1.27%20stdlib%20only-00ADD8?style=for-the-badge&logo=go)](https://go.dev/)
+[![Tests](https://img.shields.io/badge/Tests-56%20passing%20%7C%2081.1%25%20coverage-success?style=for-the-badge)](https://github.com/moin08s/stdotp/blob/main/stdotp_test.go)
+
+> 🎮 **[Click here for the interactive browser demo →](https://moin08s.github.io/stdotp/)**  
+> Step through every cryptographic feature live — no install required.
+
 Every cryptographic choice is documented and defensible; every external dependency is replaced with a standard-library equivalent in Go 1.27.
 
 ---
